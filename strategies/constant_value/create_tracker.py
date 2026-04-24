@@ -22,6 +22,7 @@ COOLDOWN_RESUME    = 0.05
 EXTRA_THRESHOLDS   = [-0.08, -0.18, -0.26]
 EXTRA_RATIOS       = [0.40, 0.70, 1.00]
 REGULAR_CAP_MULT   = 2.5
+SAFETY_CAP_MULT    = 5.0
 PAUSE_TOTAL        = 150000   # 触发增量阶段的累计投入门槛
 INCREMENT_PER_PERIOD = 2000   # 增量阶段每期注入储备金池的金额
 
@@ -77,7 +78,8 @@ PARAM_SHEET = "参数配置"
 # Named cell positions (row in 参数配置 sheet)
 # We use named ranges via cell addresses for cross-sheet formulas
 PARAM_BASE_ROW   = 5   # 沪深300 base row; +etf_index for others
-PARAM_HMUL_ROW   = 12  # 常规应投封顶倍数
+PARAM_HMUL_ROW   = 12  # 常规应投封顶倍数（2.5x）
+PARAM_SMUL_ROW   = 13  # 安全封顶倍数（5x，加码时使用）
 # 收割参数：threshold 在 C 列，ratio 在 D 列，同行
 PARAM_H1_ROW     = 15  # 一档收割
 PARAM_H2_ROW     = 16  # 二档收割
@@ -142,7 +144,8 @@ def create_param_sheet(wb):
     _hcell(ws, r2, 3, "数值")
     _hcell(ws, r2, 4, "说明")
     rows_reg = [
-        ("常规应投封顶", REGULAR_CAP_MULT, f"基准金额 × {REGULAR_CAP_MULT} 倍"),
+        ("常规应投封顶（正常/收割）", REGULAR_CAP_MULT, f"基准金额 × {REGULAR_CAP_MULT} 倍，正常定投和收割期使用"),
+        ("安全封顶（加码时）",       SAFETY_CAP_MULT,  f"基准金额 × {SAFETY_CAP_MULT} 倍，加码时先补缺口再叠加，总量不超此上限"),
     ]
     for j, (k, v, desc) in enumerate(rows_reg):
         rr = r2 + 1 + j
@@ -319,7 +322,8 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
     er1_ref = f"参数配置!$D${PARAM_E1_ROW}"
     er2_ref = f"参数配置!$D${PARAM_E2_ROW}"
     er3_ref = f"参数配置!$D${PARAM_E3_ROW}"
-    cap_ref = f"参数配置!$C${PARAM_HMUL_ROW}"
+    cap_ref  = f"参数配置!$C${PARAM_HMUL_ROW}"
+    smul_ref = f"参数配置!$C${PARAM_SMUL_ROW}"
 
     # 预填 30 行数据行
     DATA_START = HDR_ROW + 1
@@ -352,11 +356,13 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         # H: 持仓市值 = G × D
         c = _cell(ws, r, 8, fill=fill_f, fmt=YUAN)
         c.value = f"=IFERROR(G{r}*D{r},\"\")"
-        # I: 理论应投 = MAX(0, MIN(目标市值-持仓市值, 基准×cap))，偏离度≥清仓阈值时为0
+        # I: 理论应投（加码模式用5x封顶补缺口，正常/收割模式用2.5x封顶）
         c = _cell(ws, r, 9, fill=fill_f, fmt=YUAN)
         c.value = (
             f'=IFERROR(IF(F{r}>={liq_ref},0,'
-            f'MAX(0,MIN(C{r}-H{r},{base_ref}*{cap_ref}))),"")'
+            f'IF(F{r}<={e1_ref},'
+            f'MAX(0,MIN(C{r}-H{r},{base_ref}*{smul_ref})),'
+            f'MAX(0,MIN(C{r}-H{r},{base_ref}*{cap_ref})))),"")'
         )
         # J: 建议操作
         c = _cell(ws, r, 10, fill=fill_s)
@@ -369,19 +375,16 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
             f'IF(F{r}<={e2_ref},"二档加码",'
             f'IF(F{r}<={e1_ref},"一档加码","正常定投"))))))),"")'
         )
-        # K: 建议金额
-        #   清仓/收割：(持仓市值 - 目标市值) × 收割比例  → 负数（卖出）
-        #   加码：基准 × 加码比例                          → 正数（买入）
-        #   正常：理论应投（=I列）
+        # K: 建议金额（加码模式：I列缺口 + 额外加码；收割/清仓：负数）
         c = _cell(ws, r, 11, fill=fill_s, fmt=YUAN)
         c.value = (
             f'=IFERROR(IF(F{r}>={liq_ref},-(H{r}),'
             f'IF(F{r}>={h3_ref},-((H{r}-C{r})*{hr3_ref}),'
             f'IF(F{r}>={h2_ref},-((H{r}-C{r})*{hr2_ref}),'
             f'IF(F{r}>={h1_ref},-((H{r}-C{r})*{hr1_ref}),'
-            f'IF(F{r}<={e3_ref},{base_ref}*{er3_ref},'
-            f'IF(F{r}<={e2_ref},{base_ref}*{er2_ref},'
-            f'IF(F{r}<={e1_ref},{base_ref}*{er1_ref},'
+            f'IF(F{r}<={e3_ref},I{r}+{base_ref}*{er3_ref},'
+            f'IF(F{r}<={e2_ref},I{r}+{base_ref}*{er2_ref},'
+            f'IF(F{r}<={e1_ref},I{r}+{base_ref}*{er1_ref},'
             f'I{r}))))))),"")'
         )
         # L: 实际操作金额（手动）

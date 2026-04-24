@@ -101,15 +101,20 @@ def compute_period(base, period, price, ma250, holding, state, global_cumulative
         )
 
     if state == "resume":
-        regular = max(target_val - holding, 0)
-        regular = min(regular, base * REGULAR_CAP_MULT)
+        gap = max(target_val - holding, 0)
         extra = _calc_extra(base, deviation)
-        if regular + extra > base * SAFETY_CAP_MULT:
-            extra = base * SAFETY_CAP_MULT - regular
+        if extra > 0:
+            regular = min(gap, base * SAFETY_CAP_MULT)
+            if regular + extra > base * SAFETY_CAP_MULT:
+                extra = max(0, base * SAFETY_CAP_MULT - regular)
+        else:
+            regular = min(gap, base * REGULAR_CAP_MULT)
         actual = regular + extra
         notes = "冷却解除（偏离度{:+.1f}%），恢复定投".format(deviation * 100)
-        if regular >= base * REGULAR_CAP_MULT:
-            notes += "；常规封顶({:.1f}倍)".format(REGULAR_CAP_MULT)
+        if extra > 0 and regular >= base * SAFETY_CAP_MULT:
+            notes += "；封顶({:.1f}倍)".format(SAFETY_CAP_MULT)
+        elif extra == 0 and regular >= base * REGULAR_CAP_MULT:
+            notes += "；封顶({:.1f}倍)".format(REGULAR_CAP_MULT)
         return dict(
             target=target_val, deviation=deviation,
             regular=regular, harvest=0, extra=extra, actual=actual,
@@ -117,8 +122,7 @@ def compute_period(base, period, price, ma250, holding, state, global_cumulative
         )
 
     # ── Normal or Paused ──
-    regular = max(target_val - holding, 0)
-    regular = min(regular, base * REGULAR_CAP_MULT)
+    gap = max(target_val - holding, 0)
 
     harvest = 0.0
     excess = holding - target_val
@@ -139,8 +143,14 @@ def compute_period(base, period, price, ma250, holding, state, global_cumulative
         )
 
     extra = _calc_extra(base, deviation)
-    if regular + extra > base * SAFETY_CAP_MULT:
-        extra = base * SAFETY_CAP_MULT - regular
+    if extra > 0:
+        # 加码模式：先补缺口（封顶5倍安全上限），再叠加额外加码
+        regular = min(gap, base * SAFETY_CAP_MULT)
+        if regular + extra > base * SAFETY_CAP_MULT:
+            extra = max(0, base * SAFETY_CAP_MULT - regular)
+    else:
+        # 正常/收割模式：常规应投封顶2.5倍
+        regular = min(gap, base * REGULAR_CAP_MULT)
 
     actual = regular + harvest + extra
 
@@ -162,7 +172,9 @@ def compute_period(base, period, price, ma250, holding, state, global_cumulative
                 notes_parts.append("跌了多投")
             else:
                 notes_parts.append("正常投入")
-            if regular >= base * REGULAR_CAP_MULT:
+            if extra > 0 and regular >= base * SAFETY_CAP_MULT:
+                notes_parts.append("封顶({:.1f}倍)".format(SAFETY_CAP_MULT))
+            elif extra == 0 and regular >= base * REGULAR_CAP_MULT:
                 notes_parts.append("封顶({:.1f}倍)".format(REGULAR_CAP_MULT))
         elif excess > 0 and harvest == 0 and not paused:
             notes_parts.append("应投为负，偏离度不足")
