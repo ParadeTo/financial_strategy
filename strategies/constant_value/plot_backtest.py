@@ -398,13 +398,13 @@ for period_key in timeline_periods:
         ax.axvspan(max_dd_start, max_dd_end, alpha=0.10, color='#c0392b')
         dd_peak_y = net_worth_list[max_dd_start]
         dd_trough_y = net_worth_list[max_dd_end]
-        dd_mid_x = (max_dd_start + max_dd_end) / 2
         ax.annotate('', xy=(max_dd_end, dd_trough_y), xytext=(max_dd_start, dd_peak_y),
                     arrowprops=dict(arrowstyle='->', color='#c0392b', lw=2,
                                     connectionstyle='arc3,rad=-0.25'))
-        ax.text(dd_mid_x, (dd_peak_y + dd_trough_y) / 2,
+        dd_label_x = max(1, max_dd_start - len(dates) // 10)
+        ax.text(dd_label_x, (dd_peak_y + dd_trough_y) / 2,
                 f'最大回撤\n-{max_dd:.1%}',
-                ha='center', va='center', fontsize=10, color='#c0392b',
+                ha='right', va='center', fontsize=10, color='#c0392b',
                 fontproperties=font_prop,
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.88,
                           edgecolor='#c0392b', lw=1))
