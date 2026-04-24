@@ -42,7 +42,18 @@ CACHE_DIR = os.path.join(PROJECT_ROOT, "cache")
 
 
 def download_price_data():
-    """Download ETF + index data, merge, compute MA250. Returns dict of DataFrames."""
+    """Download ETF + index data, merge, compute MA250. Returns dict of DataFrames.
+
+    Strategy per ETF:
+    - 沪深300 / 中证500: Use ETF market price directly (no QDII premium, index
+      tickers 000300.SS / 000905.SS unavailable on yfinance).  Use scaled index
+      only for dates before ETF listing.
+    - 恒生指数: Use ETF market price directly (no significant QDII premium).
+      Use scaled ^HSI for pre-listing dates.
+    - 纳指100: Use ^NDX scaled to ETF price at first overlap, for the *entire*
+      date range.  The ETF (513100.SS) exhibited large QDII premiums in 2020
+      (up to 28% above NAV) which would distort the backtest.
+    """
     price_data = {}
     for tname, ticker in YFINANCE_TICKERS.items():
         df_etf = yf.download(ticker, start=DATA_START, end=DATA_END, progress=False)
@@ -52,14 +63,22 @@ def download_price_data():
         df_etf.columns = ["close"]
 
         idx_ticker = YFINANCE_INDEX_TICKERS[tname]
-        df_idx = yf.download(idx_ticker, start=DATA_START, end=DATA_END, progress=False)
+        df_idx = yf.download(idx_ticker, start=DATA_START, end=DATA_END, progress=False,
+                             auto_adjust=True)
         if isinstance(df_idx.columns, pd.MultiIndex):
             df_idx.columns = df_idx.columns.get_level_values(0)
         df_idx = df_idx[["Close"]].copy()
         df_idx.columns = ["close"]
 
         overlap = df_etf.index.intersection(df_idx.index)
-        if len(overlap) > 0:
+
+        if tname == "纳指100 ETF" and len(overlap) > 0:
+            # Use scaled index for the full range to avoid QDII premium distortion.
+            ratio = df_etf.loc[overlap[0], "close"] / df_idx.loc[overlap[0], "close"]
+            df = df_idx.copy()
+            df["close"] = df["close"] * ratio
+        elif len(overlap) > 0:
+            # Use ETF price where available; fill pre-listing dates with scaled index.
             ratio = df_etf.loc[overlap[0], "close"] / df_idx.loc[overlap[0], "close"]
             early = df_idx.loc[df_idx.index < df_etf.index[0]].copy()
             if len(early) > 0:
