@@ -2,5 +2,8 @@
 __pycache__/
 .DS_Store
 cache/
-.claude/
+.claude/settings*.json
+.claude/todos/
+.claude/plans/
+.claude/worktrees/
 *.pyc
