@@ -272,7 +272,7 @@ print('Chart 4 saved')
 # ── Chart 5: Portfolio timelines ──
 import strategies.constant_value.strategy as strat
 
-timeline_periods = [p for p in ALL_PERIODS if p.startswith('5年') or p.startswith('10年') or p.startswith('20年')]
+timeline_periods = [p for p in ALL_PERIODS]  # include all windows
 
 for period_key in timeline_periods:
     bt = all_results[period_key]
@@ -335,29 +335,161 @@ for period_key in timeline_periods:
         reserve_list.append(max(reserve_pool, 0))
         net_worth_list.append(total_holding + max(reserve_pool, 0))
 
+    # ── Statistics ───────────────────────────────────────────────────────────
+    pnl_list = [nw - uc for nw, uc in zip(net_worth_list, user_cash_list)]
+    pnl_rate_list = [pnl / uc * 100 if uc > 0 else 0.0
+                     for pnl, uc in zip(pnl_list, user_cash_list)]
+
+    # Max drawdown of net_worth curve (peak-to-trough / peak)
+    peak_nw = 0.0; peak_idx = 0
+    max_dd = 0.0; max_dd_start = 0; max_dd_end = 0
+    for i, nw in enumerate(net_worth_list):
+        if nw > peak_nw:
+            peak_nw = nw; peak_idx = i
+        if peak_nw > 0:
+            dd = (peak_nw - nw) / peak_nw
+            if dd > max_dd:
+                max_dd = dd; max_dd_start = peak_idx; max_dd_end = i
+
+    max_loss_val = min(pnl_list)
+    max_loss_idx = pnl_list.index(max_loss_val)
+    max_loss_rate = pnl_rate_list[max_loss_idx]
+
+    max_profit_val = max(pnl_list)
+    max_profit_idx = pnl_list.index(max_profit_val)
+
+    max_ret = max(pnl_rate_list)
+    max_ret_idx = pnl_rate_list.index(max_ret)
+
+    # ── Figure layout (2 rows: asset curves + pnl-rate) ──────────────────────
     is_20y = period_key.startswith('20年')
     is_10y = period_key.startswith('10年')
-    width = 22 if is_20y else 18 if is_10y else 14
-    fig, ax = plt.subplots(figsize=(width, 7))
-    ax.fill_between(range(len(dates)), net_worth_list, alpha=0.15, color='#264653')
+    is_2y  = period_key.startswith('2年')
+    width  = 22 if is_20y else 18 if is_10y else 14
+    height = 13 if not is_2y else 11
+
+    fig, (ax, ax2) = plt.subplots(
+        2, 1, figsize=(width, height),
+        gridspec_kw={'height_ratios': [3, 1.5], 'hspace': 0.45},
+    )
+
+    # ── Main: asset curves ────────────────────────────────────────────────────
+    ax.fill_between(range(len(dates)), net_worth_list, alpha=0.12, color='#264653')
     ax.plot(range(len(dates)), net_worth_list, color='#264653', linewidth=2.5, label='净资产（持仓+储备金）')
-    ax.plot(range(len(dates)), user_cash_list, color='#6c757d', linewidth=2, label='本金（用户出资）', linestyle='--')
+    ax.plot(range(len(dates)), user_cash_list, color='#6c757d', linewidth=2,
+            label='本金（用户出资）', linestyle='--')
     ax.plot(range(len(dates)), holding_list, color='#E63946', linewidth=1.5, label='持仓市值', alpha=0.8)
     ax.plot(range(len(dates)), reserve_list, color='#2A9D8F', linewidth=1.5, label='储备金余额', alpha=0.8)
 
+    # Mark max profit point
+    ax.scatter([max_profit_idx], [net_worth_list[max_profit_idx]],
+               color='#2A9D8F', s=120, zorder=6, marker='^')
+    profit_y = net_worth_list[max_profit_idx]
+    ax.annotate(f'最高收益额\n+{max_profit_val/10000:.1f}万 ({dates[max_profit_idx][:7]})',
+                xy=(max_profit_idx, profit_y),
+                xytext=(max_profit_idx - len(dates) // 6, profit_y * 0.88),
+                fontsize=10, color='#2A9D8F', fontproperties=font_prop,
+                arrowprops=dict(arrowstyle='->', color='#2A9D8F', lw=1.5),
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85,
+                          edgecolor='#2A9D8F', lw=1))
+
+    # Mark max drawdown: shade region + text
+    if max_dd > 0.005:
+        ax.axvspan(max_dd_start, max_dd_end, alpha=0.10, color='#c0392b')
+        dd_peak_y = net_worth_list[max_dd_start]
+        dd_trough_y = net_worth_list[max_dd_end]
+        dd_mid_x = (max_dd_start + max_dd_end) / 2
+        ax.annotate('', xy=(max_dd_end, dd_trough_y), xytext=(max_dd_start, dd_peak_y),
+                    arrowprops=dict(arrowstyle='->', color='#c0392b', lw=2,
+                                    connectionstyle='arc3,rad=-0.25'))
+        ax.text(dd_mid_x, (dd_peak_y + dd_trough_y) / 2,
+                f'最大回撤\n-{max_dd:.1%}',
+                ha='center', va='center', fontsize=10, color='#c0392b',
+                fontproperties=font_prop,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.88,
+                          edgecolor='#c0392b', lw=1))
+
+    # Mark max loss on main chart (if underwater)
+    if max_loss_val < 0:
+        loss_y = net_worth_list[max_loss_idx]
+        ax.scatter([max_loss_idx], [loss_y], color='#E63946', s=100, zorder=6, marker='v')
+        ax.annotate(f'最大亏损额\n{max_loss_val/10000:.1f}万 ({dates[max_loss_idx][:7]})',
+                    xy=(max_loss_idx, loss_y),
+                    xytext=(max_loss_idx + len(dates) // 8, loss_y * 0.92),
+                    fontsize=10, color='#E63946', fontproperties=font_prop,
+                    arrowprops=dict(arrowstyle='->', color='#E63946', lw=1.5),
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85,
+                              edgecolor='#E63946', lw=1))
+
     tick_step = max(1, len(dates) // 12)
     ax.set_xticks(range(0, len(dates), tick_step))
-    ax.set_xticklabels([dates[i] for i in range(0, len(dates), tick_step)], rotation=30, ha='right',
-                        fontsize=11, fontproperties=font_prop)
+    ax.set_xticklabels([dates[i] for i in range(0, len(dates), tick_step)],
+                        rotation=30, ha='right', fontsize=11, fontproperties=font_prop)
     ax.set_ylabel('金额 (元)', fontsize=14, fontproperties=font_prop)
-    title_text = f'{period_key} 回测：资金走势图'
-    ax.set_title(title_text, fontsize=20, fontweight='bold', fontproperties=font_prop, pad=15)
-    ax.legend(prop=font_prop, fontsize=13, loc='upper left')
+    ax.set_title(f'{period_key} 回测：资金走势图', fontsize=20, fontweight='bold',
+                 fontproperties=font_prop, pad=15)
+    ax.legend(prop=font_prop, fontsize=12, loc='upper left')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     for label in ax.get_yticklabels():
         label.set_fontproperties(font_prop)
     ax.yaxis.set_major_formatter(wan_func_formatter)
+
+    # Stats box (top-right)
+    ml_str = f'{max_loss_val/10000:.1f}万' if max_loss_val < 0 else '无亏损'
+    stats_text = (f'最大回撤率：{-max_dd:.1%}\n'
+                  f'最大亏损额：{ml_str}\n'
+                  f'最高收益率：+{max_ret:.1f}%\n'
+                  f'最高收益额：+{max_profit_val/10000:.1f}万')
+    ax.text(0.99, 0.01, stats_text, transform=ax.transAxes,
+            fontsize=11, fontproperties=font_prop,
+            verticalalignment='bottom', horizontalalignment='right',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.90,
+                      edgecolor='#888', linewidth=1.2))
+
+    # ── PnL-rate subplot ──────────────────────────────────────────────────────
+    ax2.axhline(y=0, color='gray', linewidth=1)
+    ax2.fill_between(range(len(dates)), pnl_rate_list, 0,
+                     where=[v >= 0 for v in pnl_rate_list], alpha=0.25, color='#2A9D8F')
+    ax2.fill_between(range(len(dates)), pnl_rate_list, 0,
+                     where=[v < 0 for v in pnl_rate_list], alpha=0.25, color='#E63946')
+    ax2.plot(range(len(dates)), pnl_rate_list, color='#264653', linewidth=2)
+
+    # Mark max return rate
+    ax2.scatter([max_ret_idx], [max_ret], color='#2A9D8F', s=90, zorder=6, marker='^')
+    ret_offset_x = -len(dates) // 7 if max_ret_idx > len(dates) // 2 else len(dates) // 7
+    ax2.annotate(f'+{max_ret:.1f}% ({dates[max_ret_idx][:7]})',
+                 xy=(max_ret_idx, max_ret),
+                 xytext=(max(1, max_ret_idx + ret_offset_x), max_ret * 0.75),
+                 fontsize=10, color='#2A9D8F', fontproperties=font_prop,
+                 arrowprops=dict(arrowstyle='->', color='#2A9D8F', lw=1.5),
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85,
+                           edgecolor='#2A9D8F', lw=1))
+
+    # Mark max loss rate (only if clearly negative)
+    if max_loss_rate < -1.0:
+        ax2.scatter([max_loss_idx], [max_loss_rate], color='#E63946', s=90, zorder=6, marker='v')
+        loss_offset_x = len(dates) // 7 if max_loss_idx < len(dates) // 2 else -len(dates) // 7
+        ax2.annotate(f'{max_loss_rate:.1f}% ({dates[max_loss_idx][:7]})',
+                     xy=(max_loss_idx, max_loss_rate),
+                     xytext=(max(1, min(len(dates) - 2, max_loss_idx + loss_offset_x)),
+                             max_loss_rate * 0.65),
+                     fontsize=10, color='#E63946', fontproperties=font_prop,
+                     arrowprops=dict(arrowstyle='->', color='#E63946', lw=1.5),
+                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85,
+                               edgecolor='#E63946', lw=1))
+
+    ax2.set_xticks(range(0, len(dates), tick_step))
+    ax2.set_xticklabels([dates[i] for i in range(0, len(dates), tick_step)],
+                         rotation=30, ha='right', fontsize=11, fontproperties=font_prop)
+    ax2.set_ylabel('盈亏率 (%)', fontsize=13, fontproperties=font_prop)
+    ax2.set_title('净资产相对本金的盈亏率走势', fontsize=14, fontweight='bold',
+                  fontproperties=font_prop)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    for label in ax2.get_yticklabels():
+        label.set_fontproperties(font_prop)
+
     fig.tight_layout()
     slug = period_key.replace('(', '_').replace(')', '')
     fig.savefig(f'{OUT}/5_timeline_{slug}.png', dpi=150, bbox_inches='tight')
