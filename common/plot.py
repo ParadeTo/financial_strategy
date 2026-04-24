@@ -11,13 +11,13 @@ font_prop = fm.FontProperties(fname=font_path)
 plt.rcParams['font.family'] = font_prop.get_name()
 plt.rcParams['axes.unicode_minus'] = False
 
-ETF_NAMES = ['沪深300 ETF', '上证50 ETF', '恒生指数 ETF', '标普500 ETF']
+ETF_NAMES = ['沪深300 ETF', '中证500 ETF', '恒生指数 ETF', '纳指100 ETF']
 
 ETF_COLORS = {
     '沪深300 ETF': '#E63946',
-    '上证50 ETF': '#F4A261',
+    '中证500 ETF': '#F4A261',
     '恒生指数 ETF': '#2A9D8F',
-    '标普500 ETF': '#264653',
+    '纳指100 ETF': '#264653',
 }
 
 PERIOD_COLORS = {

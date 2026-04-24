@@ -5,20 +5,20 @@ import pickle
 import yfinance as yf
 import pandas as pd
 
-TARGET_NAMES = ["沪深300 ETF", "上证50 ETF", "恒生指数 ETF", "标普500 ETF"]
+TARGET_NAMES = ["沪深300 ETF", "中证500 ETF", "恒生指数 ETF", "纳指100 ETF"]
 
 YFINANCE_TICKERS = {
     "沪深300 ETF": "510300.SS",
-    "上证50 ETF": "510050.SS",
+    "中证500 ETF": "510500.SS",
     "恒生指数 ETF": "159920.SZ",
-    "标普500 ETF": "513500.SS",
+    "纳指100 ETF": "513100.SS",
 }
 
 YFINANCE_INDEX_TICKERS = {
     "沪深300 ETF": "000300.SS",
-    "上证50 ETF": "000016.SS",
+    "中证500 ETF": "000905.SS",
     "恒生指数 ETF": "^HSI",
-    "标普500 ETF": "^GSPC",
+    "纳指100 ETF": "^NDX",
 }
 
 DATA_START = "2005-01-01"

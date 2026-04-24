@@ -15,8 +15,8 @@ from common.data import (
 # ═══════════════════════════════════════════════════════════
 # Strategy Config (稳健偏激进)
 # ═══════════════════════════════════════════════════════════
-BASE_AMOUNTS = [1800, 1200, 1500, 1500]
-WEIGHTS = [0.30, 0.20, 0.25, 0.25]
+BASE_AMOUNTS = [1500, 1500, 600, 2400]
+WEIGHTS = [0.25, 0.25, 0.10, 0.40]
 TOTAL_PER_PERIOD = 6000
 REGULAR_CAP_MULT = 2.5
 SAFETY_CAP_MULT = 5
