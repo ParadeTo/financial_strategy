@@ -393,18 +393,15 @@ for period_key in timeline_periods:
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85,
                           edgecolor='#2A9D8F', lw=1))
 
-    # Mark max drawdown: shade region + text
+    # Mark max drawdown: shade region + text at center of drawdown
     if max_dd > 0.005:
         ax.axvspan(max_dd_start, max_dd_end, alpha=0.10, color='#c0392b')
         dd_peak_y = net_worth_list[max_dd_start]
         dd_trough_y = net_worth_list[max_dd_end]
-        ax.annotate('', xy=(max_dd_end, dd_trough_y), xytext=(max_dd_start, dd_peak_y),
-                    arrowprops=dict(arrowstyle='->', color='#c0392b', lw=2,
-                                    connectionstyle='arc3,rad=-0.25'))
-        dd_label_x = max(1, max_dd_start - len(dates) // 10)
-        ax.text(dd_label_x, (dd_peak_y + dd_trough_y) / 2,
+        dd_center_x = (max_dd_start + max_dd_end) / 2
+        ax.text(dd_center_x, (dd_peak_y + dd_trough_y) / 2,
                 f'最大回撤\n-{max_dd:.1%}',
-                ha='right', va='center', fontsize=10, color='#c0392b',
+                ha='center', va='center', fontsize=10, color='#c0392b',
                 fontproperties=font_prop,
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.88,
                           edgecolor='#c0392b', lw=1))
@@ -435,15 +432,18 @@ for period_key in timeline_periods:
         label.set_fontproperties(font_prop)
     ax.yaxis.set_major_formatter(wan_func_formatter)
 
-    # Stats box (top-right)
+    # Stats box — below legend (upper left)
     ml_str = f'{max_loss_val/10000:.1f}万' if max_loss_val < 0 else '无亏损'
     stats_text = (f'最大回撤率：{-max_dd:.1%}\n'
                   f'最大亏损额：{ml_str}\n'
                   f'最高收益率：+{max_ret:.1f}%\n'
                   f'最高收益额：+{max_profit_val/10000:.1f}万')
-    ax.text(0.99, 0.01, stats_text, transform=ax.transAxes,
+    fig.canvas.draw()
+    legend_bbox = ax.get_legend().get_window_extent(fig.canvas.get_renderer())
+    legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
+    ax.text(0.01, legend_bbox_ax.y0 - 0.02, stats_text, transform=ax.transAxes,
             fontsize=11, fontproperties=font_prop,
-            verticalalignment='bottom', horizontalalignment='right',
+            verticalalignment='top', horizontalalignment='left',
             bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.90,
                       edgecolor='#888', linewidth=1.2))
 

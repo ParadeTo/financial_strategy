@@ -115,7 +115,7 @@ for period_key, bt in all_results.items():
         colors = ['#E63946' if d > 0 else '#2A9D8F' for d in deviations]
         ax2.bar(bar_dates, deviations, width=bar_w, color=colors, alpha=0.75)
 
-        ax2.axhline(y=8, color='#E63946', linewidth=1, linestyle=':', alpha=0.7, label='+8% 加码线')
+        ax2.axhline(y=8, color='#E63946', linewidth=1, linestyle=':', alpha=0.7, label='+8% 收割线')
         ax2.axhline(y=-8, color='#2A9D8F', linewidth=1, linestyle=':', alpha=0.7, label='-8% 加码线')
         ax2.axhline(y=40, color='#264653', linewidth=1.2, linestyle='--', alpha=0.7, label='+40% 清仓线')
         ax2.axhline(y=0, color='gray', linewidth=0.6)

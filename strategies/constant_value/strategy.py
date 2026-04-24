@@ -25,13 +25,13 @@ INCREMENT_PER_PERIOD = 2000
 TARGET_GROWTH_RATIO = float(sys.argv[1]) if len(sys.argv) > 1 else 0.7
 INCREMENT_BASES = [b * TARGET_GROWTH_RATIO for b in BASE_AMOUNTS]
 
-HARVEST_THRESHOLDS = [0.15, 0.22, 0.28]
+HARVEST_THRESHOLDS = [0.10, 0.15, 0.20]
 HARVEST_RATIOS = [0.20, 0.35, 0.50]
-LIQUIDATE_THRESHOLD = 0.40
+LIQUIDATE_THRESHOLD = 0.30
 RESERVE_INTEREST_ANNUAL = 0.01
-COOLDOWN_RESUME = 0.05
+COOLDOWN_RESUME = 0.03
 
-EXTRA_THRESHOLDS = [-0.08, -0.18, -0.26]
+EXTRA_THRESHOLDS = [-0.06, -0.15, -0.25]
 EXTRA_RATIOS = [0.40, 0.70, 1.00]
 
 STRATEGY_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -410,7 +410,7 @@ def create_parameter_overview(wb):
 # ═══════════════════════════════════════════════════════════
 HEADERS_TARGET = [
     "日期", "期数",
-    "目标市值", "当前价格", "250日均线",
+    "目标市值", "当前价格", "120日均线",
     "均线偏离度", "当前持仓市值",
     "常规应投", "网格收割", "加码金额",
     "本期实际操作", "累计投入", "操作说明",
@@ -435,7 +435,7 @@ def write_target_sheet(ws, tname, base, rows_data, start_row=1):
         style_data_cell(ws, r, 2).value = d["period"]
         style_data_cell(ws, r, 3, fmt=yuan_fmt).value = d["target"]
         style_data_cell(ws, r, 4, fmt="#,##0.0000" if d["price"] < 10 else "#,##0.00").value = d["price"]
-        style_data_cell(ws, r, 5, fmt="#,##0.0000" if d["ma250"] < 10 else "#,##0.00").value = d["ma250"]
+        style_data_cell(ws, r, 5, fmt="#,##0.0000" if d["ma120"] < 10 else "#,##0.00").value = d["ma120"]
         style_data_cell(ws, r, 6, fmt="+0.00%;-0.00%").value = d["deviation"]
         style_data_cell(ws, r, 7, fmt=yuan_fmt).value = d["holding"]
 
@@ -490,9 +490,12 @@ class TargetState:
         self.peak_value = 0.0
         self.max_drawdown = 0.0
         self.frozen_target = None
+        # 均线下方加码追踪
+        self.bonus_shares = 0.0    # A模式：完全独立
+        self.bonus_invested = 0.0  # 两种模式均追踪
 
 
-def run_backtest(price_data, bt_start, bt_end):
+def run_backtest(price_data, bt_start, bt_end, bonus_mode=None):
     dfs_in_range = {}
     for tname in TARGET_NAMES:
         df = price_data[tname]
@@ -538,10 +541,10 @@ def run_backtest(price_data, bt_start, bt_end):
                 date_use = date
 
             price = float(df.loc[date_use, "close"])
-            ma250 = float(df.loc[date_use, "ma250"])
+            ma120 = float(df.loc[date_use, "ma120"])
             holding = ts.shares * price
             ts.period += 1
-            deviation = (price - ma250) / ma250
+            deviation = (price - ma120) / ma120
 
             if paused:
                 if ts.frozen_target is None:
@@ -553,13 +556,13 @@ def run_backtest(price_data, bt_start, bt_end):
             if ts.state == "cooldown" and deviation < COOLDOWN_RESUME:
                 effective_state = "resume"
 
-            result = compute_period(ts.base, ts.period, price, ma250, holding,
+            result = compute_period(ts.base, ts.period, price, ma120, holding,
                                     effective_state, global_cumulative,
                                     frozen_target=ts.frozen_target)
 
             plans.append({
                 "tname": tname, "ts": ts, "date_use": date_use,
-                "price": price, "ma250": ma250, "holding": holding,
+                "price": price, "ma120": ma120, "holding": holding,
                 "result": result, "deviation": deviation,
             })
 
@@ -638,6 +641,21 @@ def run_backtest(price_data, bt_start, bt_end):
 
                 ts.state = result.get("state_out", "normal")
 
+            # ── 均线下方额外加码（bonus_mode A / B）──
+            if bonus_mode in ('A', 'B') and ts.state != "cooldown":
+                ma250_val = float(price_data[tname].loc[date_use, "ma250"])
+                if price < ma250_val:
+                    bonus_amt = ts.base  # 1×基准额
+                    bonus_sh = bonus_amt / price
+                    ts.bonus_invested += bonus_amt
+                    if bonus_mode == 'A':
+                        ts.bonus_shares += bonus_sh   # 独立桶，不影响主仓
+                    else:
+                        ts.shares += bonus_sh          # B：合并进主仓
+                        ts.cumulative_invested += bonus_amt
+                        if not paused:
+                            global_cumulative += bonus_amt
+
             current_value = ts.shares * price
             ts.peak_value = max(ts.peak_value, current_value)
             if ts.peak_value > 0:
@@ -650,7 +668,7 @@ def run_backtest(price_data, bt_start, bt_end):
 
             backtest_rows[tname].append(dict(
                 date=date_use.strftime("%Y-%m-%d"), period=ts.period,
-                price=price, ma250=p["ma250"], holding=holding,
+                price=price, ma120=p["ma120"], holding=holding,
                 **{k: result[k] for k in ["target", "deviation", "regular", "harvest", "extra", "actual"]},
                 notes=notes,
             ))
@@ -667,6 +685,9 @@ def run_backtest(price_data, bt_start, bt_end):
         increment_cumulative=increment_cumulative,
         increment_deployed=increment_deployed,
         backtest_rows=backtest_rows,
+        bonus_invested=sum(states[t].bonus_invested for t in TARGET_NAMES),
+        bonus_final_value=sum(states[t].bonus_shares * backtest_rows[t][-1]["price"]
+                              for t in TARGET_NAMES),
     )
 
 
@@ -824,13 +845,19 @@ if __name__ == "__main__":
     create_parameter_overview(wb)
 
     all_results = {}
+    bonus_comparison = {}  # label -> {base, A, B}
+
     for label, bt_start, bt_end in BACKTEST_PERIODS:
         result = run_backtest(price_data, bt_start, bt_end)
         if result is None:
             print(f"  {label}: skipped (insufficient data)")
             continue
 
+        result_A = run_backtest(price_data, bt_start, bt_end, bonus_mode='A')
+        result_B = run_backtest(price_data, bt_start, bt_end, bonus_mode='B')
+
         all_results[label] = result
+        bonus_comparison[label] = dict(base=result, A=result_A, B=result_B)
 
         rows_all = result["backtest_rows"]
         first_date = rows_all[TARGET_NAMES[0]][0]["date"]
@@ -864,3 +891,44 @@ if __name__ == "__main__":
     save_price_cache(price_data)
     save_backtest_cache(all_results)
     print("  Cache saved")
+
+    # ── 三版本对比 ────────────────────────────────────────────
+    def net_assets(r):
+        return sum(r["states"][t].shares * r["backtest_rows"][t][-1]["price"]
+                   for t in TARGET_NAMES) + r["reserve_pool"]
+
+    def total_invested(r):
+        return sum(r["states"][t].cumulative_invested for t in TARGET_NAMES)
+
+    print(f"\n{'═'*90}")
+    print(f"  均线下方加码对比（每期每标的额外投入 1×基准，当价格 < MA250 时）")
+    print(f"{'═'*90}")
+    print(f"  {'窗口':<16} │ {'基线':^20} │ {'A(独立桶)':^26} │ {'B(合并主仓)':^26}")
+    print(f"  {'':16} │ {'收益率':>8} {'本金':>8} │ {'收益率':>8} {'本金':>8} {'额外投':>7} │ {'收益率':>8} {'本金':>8} {'额外投':>7}")
+    print(f"  {'─'*88}")
+
+    for label, cmp in bonus_comparison.items():
+        base, ra, rb = cmp["base"], cmp["A"], cmp["B"]
+
+        inv0 = total_invested(base)
+        net0 = net_assets(base)
+        ret0 = (net0 - inv0) / inv0 * 100
+
+        # A：主仓收益 + bonus桶市值
+        inv_a = total_invested(ra)
+        bonus_inv_a = ra["bonus_invested"]
+        bonus_val_a = ra["bonus_final_value"]
+        net_a = net_assets(ra) + bonus_val_a
+        ret_a = (net_a - inv_a - bonus_inv_a) / (inv_a + bonus_inv_a) * 100
+
+        # B：合并，bonus已计入cumulative_invested
+        inv_b = total_invested(rb)
+        bonus_inv_b = rb["bonus_invested"]
+        net_b = net_assets(rb)
+        ret_b = (net_b - inv_b) / inv_b * 100
+
+        print(f"  {label:<16} │ {ret0:>+7.1f}% {inv0/10000:>6.1f}万 │ "
+              f"{ret_a:>+7.1f}% {inv_a/10000:>6.1f}万 {bonus_inv_a/10000:>5.1f}万 │ "
+              f"{ret_b:>+7.1f}% {inv_b/10000:>6.1f}万 {bonus_inv_b/10000:>5.1f}万")
+
+    print(f"{'═'*90}")

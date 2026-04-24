@@ -90,6 +90,7 @@ def download_price_data():
             df = df_etf
 
         df["ma250"] = df["close"].rolling(window=250).mean()
+        df["ma120"] = df["close"].rolling(window=120).mean()
         df = df.dropna(subset=["ma250"])
         price_data[tname] = df
         print(f"  {tname}: {len(df)} rows with MA250, "
