@@ -271,6 +271,7 @@ print('Chart 4 saved')
 
 # ── Chart 5: Portfolio timelines ──
 import strategies.constant_value.strategy as strat
+from strategies.constant_value.strategy import BASE_AMOUNTS
 
 timeline_periods = [p for p in ALL_PERIODS]  # include all windows
 
@@ -307,7 +308,7 @@ for period_key in timeline_periods:
             price = row['price']
             shares = 0
             for r in rows_to_i:
-                if '清仓' in r['notes'] and r['actual'] < 0:
+                if '全仓清仓' in r['notes'] and r['actual'] < 0:
                     shares = 0
                 elif r['actual'] > 0:
                     shares += r['actual'] / r['price']
@@ -360,6 +361,13 @@ for period_key in timeline_periods:
 
     max_ret = max(pnl_rate_list)
     max_ret_idx = pnl_rate_list.index(max_ret)
+
+    # ── Collect liquidation period indices ──────────────────────────────────
+    liquidate_idx = set()
+    for tname in etf_names_list:
+        for i, r in enumerate(backtest_rows[tname]):
+            if '全仓清仓' in r['notes'] and r['actual'] < 0:
+                liquidate_idx.add(i)
 
     # ── Figure layout (2 rows: asset curves + pnl-rate) ──────────────────────
     is_20y = period_key.startswith('20年')
@@ -446,6 +454,17 @@ for period_key in timeline_periods:
             verticalalignment='top', horizontalalignment='left',
             bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.90,
                       edgecolor='#888', linewidth=1.2))
+
+    # ── Rug markers: liquidations (dark red) ─────────────────────────────────
+    for idx in sorted(liquidate_idx):
+        ax.axvline(x=idx, ymin=0, ymax=0.05, color='#7B0D1E', linewidth=2.5, alpha=0.95, zorder=6)
+
+    # Add rug legend entry if any liquidations exist
+    from matplotlib.lines import Line2D
+    if liquidate_idx:
+        rug_handles = [Line2D([0], [0], color='#7B0D1E', linewidth=3, label='清仓期')]
+        ax.legend(handles=ax.get_legend().legend_handles + rug_handles,
+                  prop=font_prop, fontsize=12, loc='upper left')
 
     # ── PnL-rate subplot ──────────────────────────────────────────────────────
     ax2.axhline(y=0, color='gray', linewidth=1)

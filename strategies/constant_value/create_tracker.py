@@ -15,14 +15,9 @@ ETF_NAMES   = ["沪深300 ETF", "中证500 ETF", "恒生指数 ETF", "纳指100 
 BASE_AMOUNTS = [1500, 1500, 600, 2400]
 MARKETS      = ["A股", "A股", "港股", "美股"]
 
-HARVEST_THRESHOLDS = [0.15, 0.22, 0.28]
-HARVEST_RATIOS     = [0.20, 0.35, 0.50]
-LIQUIDATE          = 0.40
-COOLDOWN_RESUME    = 0.05
-EXTRA_THRESHOLDS   = [-0.08, -0.18, -0.26]
-EXTRA_RATIOS       = [0.40, 0.70, 1.00]
-REGULAR_CAP_MULT   = 2.5
-SAFETY_CAP_MULT    = 5.0
+PARTIAL_LIQUIDATE  = 0.35   # 减半清仓：减至目标市值 50%，不进冷却
+FULL_LIQUIDATE     = 0.55   # 全仓清仓 + 冷却期
+COOLDOWN_RESUME    = 0.03
 PAUSE_TOTAL        = 150000   # 触发增量阶段的累计投入门槛
 INCREMENT_PER_PERIOD = 2000   # 增量阶段每期注入储备金池的金额
 
@@ -76,28 +71,12 @@ def _cell(ws, row, col, value=None, fmt=None, fill=None, font=None, align=None):
 PARAM_SHEET = "参数配置"
 
 # Named cell positions (row in 参数配置 sheet)
-# We use named ranges via cell addresses for cross-sheet formulas
-PARAM_BASE_ROW   = 5   # 沪深300 base row; +etf_index for others
-PARAM_HMUL_ROW   = 12  # 常规应投封顶倍数（2.5x）
-PARAM_SMUL_ROW   = 13  # 安全封顶倍数（5x，加码时使用）
-# 收割参数：threshold 在 C 列，ratio 在 D 列，同行
-PARAM_H1_ROW     = 15  # 一档收割
-PARAM_H2_ROW     = 16  # 二档收割
-PARAM_H3_ROW     = 17  # 三档收割
-PARAM_LIQ_ROW    = 18  # 极端清仓
-PARAM_HR1_ROW    = 15  # 一档收割比例（同行 D 列）
-PARAM_HR2_ROW    = 16
-PARAM_HR3_ROW    = 17
-# 加码参数：threshold 在 C 列，ratio 在 D 列，同行
-PARAM_E1_ROW     = 21  # 一档加码
-PARAM_E2_ROW     = 22  # 二档加码
-PARAM_E3_ROW     = 23  # 三档加码
-PARAM_ER1_ROW    = 21  # 一档加码比例（同行 D 列）
-PARAM_ER2_ROW    = 22
-PARAM_ER3_ROW    = 23
+PARAM_BASE_ROW        = 5   # 沪深300 base row; +etf_index for others
+PARAM_PARTIAL_LIQ_ROW = 12  # 减半清仓偏离度阈值
+PARAM_FULL_LIQ_ROW    = 13  # 全仓清仓偏离度阈值
 # 增量阶段参数
-PARAM_PAUSE_ROW  = 26  # 触发增量阶段门槛（累计净投入）
-PARAM_INCR_ROW   = 27  # 增量阶段每期注入金额
+PARAM_PAUSE_ROW  = 16  # 触发增量阶段门槛（累计净投入）
+PARAM_INCR_ROW   = 17  # 增量阶段每期注入金额
 
 
 def create_param_sheet(wb):
@@ -139,69 +118,32 @@ def create_param_sheet(wb):
 
     # ── 常规封顶 ────────────────────────────
     r2 = total_row + 2
-    _hcell(ws, r2, 1, "常规定投")
+    _hcell(ws, r2, 1, "清仓参数")
     _hcell(ws, r2, 2, "参数")
     _hcell(ws, r2, 3, "数值")
     _hcell(ws, r2, 4, "说明")
-    rows_reg = [
-        ("常规应投封顶（正常/收割）", REGULAR_CAP_MULT, f"基准金额 × {REGULAR_CAP_MULT} 倍，正常定投和收割期使用"),
-        ("安全封顶（加码时）",       SAFETY_CAP_MULT,  f"基准金额 × {SAFETY_CAP_MULT} 倍，加码时先补缺口再叠加，总量不超此上限"),
+    rows_liq = [
+        ("减半清仓偏离度阈值", PARTIAL_LIQUIDATE,
+         f"偏离度超 +{int(PARTIAL_LIQUIDATE*100)}%，卖至目标市值 50%，不进冷却"),
+        ("全仓清仓偏离度阈值", FULL_LIQUIDATE,
+         f"偏离度超 +{int(FULL_LIQUIDATE*100)}%，全部清仓并进入冷却期"),
     ]
-    for j, (k, v, desc) in enumerate(rows_reg):
+    for j, (k, v, desc) in enumerate(rows_liq):
         rr = r2 + 1 + j
         _cell(ws, rr, 1, k,    fill=FORMULA_FILL)
         _cell(ws, rr, 2, "",   fill=FORMULA_FILL)
-        _cell(ws, rr, 3, v,    fill=MANUAL_FILL)
+        _cell(ws, rr, 3, v,    fill=MANUAL_FILL, fmt='+0%')
         _cell(ws, rr, 4, desc, fill=FORMULA_FILL, align=LEFT)
 
-    # ── 网格收割参数 ────────────────────────
-    r3 = r2 + 3
-    _hcell(ws, r3, 1, "网格收割")
-    for h in ["档位", "偏离度触发阈值", "卖出比例（超额部分）", "说明"]:
-        _hcell(ws, r3, 2 + ["档位","偏离度触发阈值","卖出比例（超额部分）","说明"].index(h), h)
-
-    harvest_rows = [
-        ("一档", HARVEST_THRESHOLDS[0], HARVEST_RATIOS[0], "轻度超买"),
-        ("二档", HARVEST_THRESHOLDS[1], HARVEST_RATIOS[1], "中度超买"),
-        ("三档", HARVEST_THRESHOLDS[2], HARVEST_RATIOS[2], "重度超买"),
-        ("极端清仓", LIQUIDATE, 1.0,                        "清仓并冷却"),
-    ]
-    for j, (level, thr, ratio, desc) in enumerate(harvest_rows):
-        rr = r3 + 1 + j
-        _cell(ws, rr, 1, level, fill=FORMULA_FILL)
-        _cell(ws, rr, 2, "",    fill=FORMULA_FILL)
-        _cell(ws, rr, 3, thr,   fill=MANUAL_FILL, fmt='+0%')
-        _cell(ws, rr, 4, ratio, fill=MANUAL_FILL, fmt='0%')
-        _cell(ws, rr, 5, desc,  fill=FORMULA_FILL, align=LEFT)
-
-    # ── 大跌加码参数 ────────────────────────
-    r4 = r3 + 6
-    _hcell(ws, r4, 1, "大跌加码")
-    for h in ["档位", "偏离度触发阈值", "加码金额（基准×比例）", "说明"]:
-        _hcell(ws, r4, 2 + ["档位","偏离度触发阈值","加码金额（基准×比例）","说明"].index(h), h)
-
-    extra_rows = [
-        ("一档", EXTRA_THRESHOLDS[0], EXTRA_RATIOS[0], "轻度超卖"),
-        ("二档", EXTRA_THRESHOLDS[1], EXTRA_RATIOS[1], "中度超卖"),
-        ("三档", EXTRA_THRESHOLDS[2], EXTRA_RATIOS[2], "重度超卖"),
-    ]
-    for j, (level, thr, ratio, desc) in enumerate(extra_rows):
-        rr = r4 + 1 + j
-        _cell(ws, rr, 1, level, fill=FORMULA_FILL)
-        _cell(ws, rr, 2, "",    fill=FORMULA_FILL)
-        _cell(ws, rr, 3, thr,   fill=MANUAL_FILL, fmt='0%')
-        _cell(ws, rr, 4, ratio, fill=MANUAL_FILL, fmt='0%')
-        _cell(ws, rr, 5, desc,  fill=FORMULA_FILL, align=LEFT)
-
     # ── 增量阶段参数 ────────────────────────
-    r5 = r4 + 5
-    ws.cell(row=r5, column=1, value="五、增量阶段").font = Font(bold=True, size=13, color="2F5496")
+    r3 = r2 + 4
+    ws.cell(row=r3, column=1, value="三、增量阶段").font = Font(bold=True, size=13, color="2F5496")
     rows_incr = [
         ("触发门槛（累计净投入）", PAUSE_TOTAL,          "达到后切换为增量阶段，买卖均走储备金池"),
         ("每期增量注入金额",       INCREMENT_PER_PERIOD, "每期向储备金池注入的新增资金"),
     ]
     for j, (k, v, desc) in enumerate(rows_incr):
-        rr = r5 + 1 + j
+        rr = r3 + 1 + j
         _cell(ws, rr, 1, k,    fill=FORMULA_FILL, font=BOLD_FONT)
         _cell(ws, rr, 2, "",   fill=FORMULA_FILL)
         _cell(ws, rr, 3, v,    fill=MANUAL_FILL, fmt=YUAN)
@@ -226,17 +168,17 @@ def create_param_sheet(wb):
 #  B  期数          手动
 #  C  目标市值       公式  = 基准金额 × B
 #  D  当前价格       手动
-#  E  250日均线      手动
+#  E  120日均线      手动
 #  F  均线偏离度     公式  = (D-E)/E
 #  G  当前持仓份额   手动（上期操作后份额，首期填0）
 #  H  当前持仓市值   公式  = G × D
-#  I  理论应投       公式  = MAX(0, MIN(C-H, 基准×cap))
-#  J  建议操作       公式  nested IF
-#  K  建议金额       公式  基于操作类型
+#  I  建议操作金额   公式  正=买 负=卖（恒定市值法：缺口补足/超额卖出/减半清仓/全清仓）
+#  J  建议操作       公式  文字说明
+#  K  建议金额       公式  = I（备用列，与I相同）
 #  L  实际操作金额   手动  正=买入 负=卖出
 #  M  实际买卖份额   手动  正=买入 负=卖出
 #  N  操作后持仓份额  公式  = G + M
-#  O  累计净投入     公式  = 上期O + MAX(0,L) - MAX(0,-L) ... 实际就是 O_prev + L
+#  O  累计净投入     公式  = 上期O + L
 #  P  储备金变化     公式  = -L（卖出补充储备金，买入减少储备金）
 #  Q  备注          手动
 # ═══════════════════════════════════════════════════════════
@@ -246,11 +188,11 @@ HEADERS = [
     "期数",        # B 2
     "目标市值",    # C 3
     "当前价格",    # D 4
-    "250日均线",   # E 5
+    "120日均线",   # E 5
     "均线偏离度",  # F 6
     "持仓份额",    # G 7  (上期结束后的持仓)
     "持仓市值",    # H 8
-    "理论应投",    # I 9
+    "建议操作金额", # I 9  正=买 负=卖
     "建议操作",    # J 10
     "建议金额",    # K 11
     "实际操作(元)", # L 12  正=买  负=卖
@@ -307,23 +249,9 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         _hcell(ws, HDR_ROW, i, h)
 
     # 基准金额引用（参数配置!$C$row）
-    base_ref = f"参数配置!$C${PARAM_BASE_ROW + etf_index}"
-    # 收割阈值引用
-    h1_ref = f"参数配置!$C${PARAM_H1_ROW}"
-    h2_ref = f"参数配置!$C${PARAM_H2_ROW}"
-    h3_ref = f"参数配置!$C${PARAM_H3_ROW}"
-    liq_ref = f"参数配置!$C${PARAM_LIQ_ROW}"
-    hr1_ref = f"参数配置!$D${PARAM_H1_ROW}"
-    hr2_ref = f"参数配置!$D${PARAM_H2_ROW}"
-    hr3_ref = f"参数配置!$D${PARAM_H3_ROW}"
-    e1_ref  = f"参数配置!$C${PARAM_E1_ROW}"
-    e2_ref  = f"参数配置!$C${PARAM_E2_ROW}"
-    e3_ref  = f"参数配置!$C${PARAM_E3_ROW}"
-    er1_ref = f"参数配置!$D${PARAM_E1_ROW}"
-    er2_ref = f"参数配置!$D${PARAM_E2_ROW}"
-    er3_ref = f"参数配置!$D${PARAM_E3_ROW}"
-    cap_ref  = f"参数配置!$C${PARAM_HMUL_ROW}"
-    smul_ref = f"参数配置!$C${PARAM_SMUL_ROW}"
+    base_ref       = f"参数配置!$C${PARAM_BASE_ROW + etf_index}"
+    partial_ref    = f"参数配置!$C${PARAM_PARTIAL_LIQ_ROW}"
+    full_ref       = f"参数配置!$C${PARAM_FULL_LIQ_ROW}"
 
     # 预填 30 行数据行
     DATA_START = HDR_ROW + 1
@@ -346,7 +274,7 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         c.value = f"=IFERROR({base_ref}*B{r},\"\")"
         # D: 当前价格
         _cell(ws, r, 4, fill=fill_m, fmt="#,##0.0000")
-        # E: 250日均线
+        # E: 120日均线
         _cell(ws, r, 5, fill=fill_m, fmt="#,##0.0000")
         # F: 均线偏离度 = (D-E)/E
         c = _cell(ws, r, 6, fill=fill_f, fmt=PCT)
@@ -356,37 +284,27 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         # H: 持仓市值 = G × D
         c = _cell(ws, r, 8, fill=fill_f, fmt=YUAN)
         c.value = f"=IFERROR(G{r}*D{r},\"\")"
-        # I: 理论应投（加码模式用5x封顶补缺口，正常/收割模式用2.5x封顶）
+        # I: 建议操作金额（恒定市值法：正=买入差额，负=卖出超额/减半/全清）
         c = _cell(ws, r, 9, fill=fill_f, fmt=YUAN)
         c.value = (
-            f'=IFERROR(IF(F{r}>={liq_ref},0,'
-            f'IF(F{r}<={e1_ref},'
-            f'MAX(0,MIN(C{r}-H{r},{base_ref}*{smul_ref})),'
-            f'MAX(0,MIN(C{r}-H{r},{base_ref}*{cap_ref})))),"")'
+            f'=IFERROR('
+            f'IF(F{r}>={full_ref},-H{r},'
+            f'IF(AND(F{r}>={partial_ref},H{r}>C{r}*0.5),-(H{r}-C{r}*0.5),'
+            f'C{r}-H{r})),'
+            f'"")'
         )
         # J: 建议操作
         c = _cell(ws, r, 10, fill=fill_s)
         c.value = (
-            f'=IFERROR(IF(F{r}>={liq_ref},"极端清仓",'
-            f'IF(F{r}>={h3_ref},"三档收割",'
-            f'IF(F{r}>={h2_ref},"二档收割",'
-            f'IF(F{r}>={h1_ref},"一档收割",'
-            f'IF(F{r}<={e3_ref},"三档加码",'
-            f'IF(F{r}<={e2_ref},"二档加码",'
-            f'IF(F{r}<={e1_ref},"一档加码","正常定投"))))))),"")'
+            f'=IFERROR('
+            f'IF(F{r}>={full_ref},"全仓清仓",'
+            f'IF(AND(F{r}>={partial_ref},H{r}>C{r}*0.5),"减半清仓",'
+            f'IF(H{r}>C{r},"卖出超额","正常定投"))),'
+            f'"")'
         )
-        # K: 建议金额（加码模式：I列缺口 + 额外加码；收割/清仓：负数）
+        # K: 建议金额 = I
         c = _cell(ws, r, 11, fill=fill_s, fmt=YUAN)
-        c.value = (
-            f'=IFERROR(IF(F{r}>={liq_ref},-(H{r}),'
-            f'IF(F{r}>={h3_ref},-((H{r}-C{r})*{hr3_ref}),'
-            f'IF(F{r}>={h2_ref},-((H{r}-C{r})*{hr2_ref}),'
-            f'IF(F{r}>={h1_ref},-((H{r}-C{r})*{hr1_ref}),'
-            f'IF(F{r}<={e3_ref},I{r}+{base_ref}*{er3_ref},'
-            f'IF(F{r}<={e2_ref},I{r}+{base_ref}*{er2_ref},'
-            f'IF(F{r}<={e1_ref},I{r}+{base_ref}*{er1_ref},'
-            f'I{r}))))))),"")'
-        )
+        c.value = f'=IFERROR(I{r},"")'
         # L: 实际操作金额（手动）
         _cell(ws, r, 12, fill=fill_m, fmt=YUAN)
         # M: 买卖份额（手动）
@@ -461,7 +379,7 @@ def create_period_summary_sheet(wb):
     for i, h in enumerate(headers, 1):
         _hcell(ws, HDR_ROW, i, h)
 
-    pause_ref = f"参数配置!$C${PARAM_BASE_ROW + 10}"   # 我们把 PAUSE_TOTAL 写进参数表
+    pause_ref = f"参数配置!$C${PARAM_PAUSE_ROW}"
 
     DATA_START = HDR_ROW + 1
     MAX_ROWS = 100

@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from strategies.constant_value.strategy import TargetState
 from common.data import load_price_cache, load_backtest_cache
 from common.plot import plt, font_prop, ETF_NAMES
+from strategies.constant_value.strategy import BASE_AMOUNTS
 import matplotlib.dates as mdates
 import pandas as pd
 
@@ -21,7 +22,8 @@ os.makedirs(OUT, exist_ok=True)
 for period_key, bt in all_results.items():
     backtest_rows = bt['backtest_rows']
 
-    for tname in ETF_NAMES:
+    for etf_idx, tname in enumerate(ETF_NAMES):
+        base = BASE_AMOUNTS[etf_idx]
         rows = backtest_rows[tname]
         df = price_data[tname].copy()
         bt_start = rows[0]['date']
@@ -33,7 +35,6 @@ for period_key, bt in all_results.items():
         ma250_all = df['ma250'].values
 
         buy_dates, buy_prices, buy_sizes = [], [], []
-        extra_dates, extra_prices, extra_sizes = [], [], []
         sell_dates, sell_prices, sell_sizes = [], [], []
         liquidate_dates, liquidate_prices = [], []
 
@@ -41,7 +42,7 @@ for period_key, bt in all_results.items():
             d = pd.Timestamp(r['date'])
             p = r['price']
 
-            if '清仓' in r['notes'] and r['actual'] < 0:
+            if '全仓清仓' in r['notes'] and r['actual'] < 0:
                 liquidate_dates.append(d)
                 liquidate_prices.append(p)
             elif r['harvest'] < 0:
@@ -51,15 +52,10 @@ for period_key, bt in all_results.items():
 
             if r['actual'] > 0:
                 regular = r['regular'] if r['regular'] > 0 else 0
-                extra = r['extra']
                 if regular > 0:
                     buy_dates.append(d)
                     buy_prices.append(p)
                     buy_sizes.append(regular)
-                if extra > 0:
-                    extra_dates.append(d)
-                    extra_prices.append(p)
-                    extra_sizes.append(extra)
 
         is_10y = period_key.startswith('10年')
         is_5y = period_key.startswith('5年')
@@ -86,17 +82,13 @@ for period_key, bt in all_results.items():
             sizes = [max(s_base, s_base * s / 1500) for s in buy_sizes]
             ax1.scatter(buy_dates, buy_prices, c='#2A9D8F', s=sizes, marker='^',
                         alpha=0.85, zorder=3, label='常规买入', edgecolors='white', linewidths=0.8)
-        if extra_dates:
-            sizes = [max(s_base * 1.2, s_base * s / 1500 * 1.8) for s in extra_sizes]
-            ax1.scatter(extra_dates, extra_prices, c='#E76F51', s=sizes, marker='^',
-                        alpha=0.9, zorder=3, label='加码买入', edgecolors='white', linewidths=0.8)
         if sell_dates:
             sizes = [max(s_base, s_base * s / 1500) for s in sell_sizes]
             ax1.scatter(sell_dates, sell_prices, c='#E63946', s=sizes, marker='v',
                         alpha=0.85, zorder=3, label='网格收割', edgecolors='white', linewidths=0.8)
         if liquidate_dates:
             ax1.scatter(liquidate_dates, liquidate_prices, c='#264653', s=350, marker='X',
-                        alpha=1.0, zorder=4, label='极端清仓', edgecolors='white', linewidths=1.5)
+                        alpha=1.0, zorder=6, label='极端清仓', edgecolors='white', linewidths=1.5)
 
         ax1.set_title(f'{tname} — {period_key} 股价走势与定投操作',
                       fontsize=22, fontweight='bold', fontproperties=font_prop, pad=15)
