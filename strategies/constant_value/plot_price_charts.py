@@ -83,7 +83,7 @@ for period_key, bt in all_results.items():
         if sell_dates:
             sizes = [max(s_base, s_base * s / 1500) for s in sell_sizes]
             ax1.scatter(sell_dates, sell_prices, c='#E63946', s=sizes, marker='v',
-                        alpha=0.85, zorder=3, label='卖出超额/减半', edgecolors='white', linewidths=0.8)
+                        alpha=0.85, zorder=3, label='卖出超额', edgecolors='white', linewidths=0.8)
         if liquidate_dates:
             ax1.scatter(liquidate_dates, liquidate_prices, c='#264653', s=350, marker='X',
                         alpha=1.0, zorder=6, label='全仓清仓', edgecolors='white', linewidths=1.5)
@@ -105,7 +105,6 @@ for period_key, bt in all_results.items():
         colors = ['#E63946' if d > 0 else '#2A9D8F' for d in deviations]
         ax2.bar(bar_dates, deviations, width=bar_w, color=colors, alpha=0.75)
 
-        ax2.axhline(y=35, color='#F4A261', linewidth=1.2, linestyle='--', alpha=0.8, label='+35% 减半清仓')
         ax2.axhline(y=55, color='#264653', linewidth=1.2, linestyle='--', alpha=0.8, label='+55% 全仓清仓')
         ax2.axhline(y=0, color='gray', linewidth=0.6)
 
