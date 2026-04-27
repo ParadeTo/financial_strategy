@@ -2,8 +2,9 @@
 
 策略要点：
 - 恒定市值法：持仓 < 目标买入差额，持仓 > 目标直接卖出全部超额
-- 极端清仓：偏离度超 +FULL_LIQUIDATE_THRESHOLD 全清仓；超 +PARTIAL_LIQUIDATE_THRESHOLD 减至目标50%
-- 无加码机制
+- 极端清仓：偏离度超 +FULL_LIQUIDATE_THRESHOLD 全清仓，进入冷却期
+- 冷却期间目标市值冻结不增长，解除后从第1期重新积累
+- 无减半清仓、无加码机制
 """
 
 import sys
@@ -27,8 +28,7 @@ TOTAL_PER_PERIOD = 6000
 PAUSE_TOTAL = 150000
 INCREMENT_PER_PERIOD = 2000
 
-PARTIAL_LIQUIDATE_THRESHOLD = 0.35   # 减至目标市值 50%，不进冷却
-FULL_LIQUIDATE_THRESHOLD = 0.55      # 全仓清仓 + 冷却 + 重置期数
+FULL_LIQUIDATE_THRESHOLD = 0.55      # 全仓清仓 + 冷却 + 目标冻结
 RESERVE_INTEREST_ANNUAL = 0.01
 COOLDOWN_RESUME = 0.03
 LARGE_INVEST_MULT = 2.5  # regular > base × 2.5 视为单期大额投入
@@ -94,25 +94,13 @@ def compute_period(base, period, price, ma250, holding, state, global_cumulative
             state_out="cooldown" if deviation >= COOLDOWN_RESUME else "resume_next",
         )
 
-    # 全仓清仓（优先级最高）
+    # 全仓清仓
     if deviation >= FULL_LIQUIDATE_THRESHOLD and holding > 0:
         return dict(
             target=target_val, deviation=deviation,
             regular=0, harvest=0, extra=0, actual=-holding,
             notes="全仓清仓（偏离度{:+.1f}%）".format(deviation * 100),
             state_out="cooldown",
-        )
-
-    # 减半清仓：卖至目标市值的 50%，同时目标市值也减半
-    partial_target = target_val * 0.5
-    if deviation >= PARTIAL_LIQUIDATE_THRESHOLD and holding > partial_target:
-        sell_amount = holding - partial_target
-        return dict(
-            target=target_val, deviation=deviation,
-            regular=0, harvest=-sell_amount, extra=0, actual=-sell_amount,
-            notes="减半清仓（偏离度{:+.1f}%，减至目标50%%）".format(deviation * 100),
-            state_out="normal",
-            partial_liquidate=True,
         )
 
     gap = max(target_val - holding, 0)
@@ -201,9 +189,9 @@ def create_parameter_overview(wb):
     row = r + 2
     ws1.cell(row=row, column=1, value="三、清仓机制").font = Font(bold=True, size=13, color="2F5496")
     for i, (k, v) in enumerate([
-        ("减半清仓条件", "偏离度超 +{:.0f}%，持仓减至目标市值 50%，不进冷却期".format(PARTIAL_LIQUIDATE_THRESHOLD * 100)),
         ("全仓清仓条件", "偏离度超 +{:.0f}%，全部卖出并进入冷却期".format(FULL_LIQUIDATE_THRESHOLD * 100)),
-        ("冷却解除条件", "均线偏离度回落至 +{:.0f}% 以下，目标市值从 0 重新累积".format(COOLDOWN_RESUME * 100)),
+        ("冷却期目标市值", "冻结不增长，等到偏离度回落 +{:.0f}% 以下才解冻".format(COOLDOWN_RESUME * 100)),
+        ("冷却解除后", "目标市值从第 1 期重新积累，无减半清仓档位"),
         ("各标的独立判断", "清仓/冷却互不影响"),
     ]):
         r = row + 1 + i
@@ -417,6 +405,11 @@ def run_backtest(price_data, bt_start, bt_end):
             ts.period += 1
             deviation = (price - ma250) / ma250
 
+            # 冷却期目标冻结：每轮把 period_offset 追上 period，保持 effective_period=0
+            # 解冻时（deviation < COOLDOWN_RESUME）不追，让 effective_period 自然变为 1
+            if ts.state == "cooldown" and deviation >= COOLDOWN_RESUME:
+                ts.period_offset = ts.period
+
             if paused and ts.state not in ("cooldown",):
                 effective_prev = (ts.period - 1) - ts.period_offset
                 if ts.frozen_target is None:
@@ -487,13 +480,6 @@ def run_backtest(price_data, bt_start, bt_end):
                     shares_sold = sell_amount / price
                     ts.shares = max(0, ts.shares - shares_sold)
                     reserve_pool += sell_amount
-
-                # 减半清仓后，有效期数（目标市值）同步减半
-                if result.get("partial_liquidate"):
-                    ep = ts.period - ts.period_offset
-                    ts.period_offset = ts.period - ep / 2
-                    if ts.frozen_target is not None:
-                        ts.frozen_target *= 0.5
 
                 ts.state = result.get("state_out", "normal")
 
