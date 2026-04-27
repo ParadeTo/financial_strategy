@@ -81,9 +81,9 @@ def style_data_cell(ws, row, col, fmt=None, font=None):
 # ═══════════════════════════════════════════════════════════
 # DCA Engine
 # ═══════════════════════════════════════════════════════════
-def compute_period(base, period, price, ma120, holding, state, global_cumulative, frozen_target=None):
+def compute_period(base, period, price, ma250, holding, state, global_cumulative, frozen_target=None):
     target_val = frozen_target if frozen_target is not None else base * period
-    deviation = (price - ma120) / ma120 if ma120 != 0 else 0
+    deviation = (price - ma250) / ma250 if ma250 != 0 else 0
     paused = global_cumulative >= PAUSE_TOTAL
 
     if state == "cooldown":
@@ -265,7 +265,7 @@ def create_parameter_overview(wb):
 # ═══════════════════════════════════════════════════════════
 HEADERS_TARGET = [
     "日期", "期数",
-    "目标市值", "当前价格", "120日均线",
+    "目标市值", "当前价格", "250日均线",
     "均线偏离度", "当前持仓市值",
     "常规应投", "网格收割",
     "本期实际操作", "累计投入", "操作说明",
@@ -290,7 +290,7 @@ def write_target_sheet(ws, tname, base, rows_data, start_row=1):
         style_data_cell(ws, r, 2).value = d["period"]
         style_data_cell(ws, r, 3, fmt=yuan_fmt).value = d["target"]
         style_data_cell(ws, r, 4, fmt="#,##0.0000" if d["price"] < 10 else "#,##0.00").value = d["price"]
-        style_data_cell(ws, r, 5, fmt="#,##0.0000" if d["ma120"] < 10 else "#,##0.00").value = d["ma120"]
+        style_data_cell(ws, r, 5, fmt="#,##0.0000" if d["ma250"] < 10 else "#,##0.00").value = d["ma250"]
         style_data_cell(ws, r, 6, fmt="+0.00%;-0.00%").value = d["deviation"]
         style_data_cell(ws, r, 7, fmt=yuan_fmt).value = d["holding"]
 
@@ -412,10 +412,10 @@ def run_backtest(price_data, bt_start, bt_end):
                 date_use = date
 
             price = float(df.loc[date_use, "close"])
-            ma120 = float(df.loc[date_use, "ma120"])
+            ma250 = float(df.loc[date_use, "ma250"])
             holding = ts.shares * price
             ts.period += 1
-            deviation = (price - ma120) / ma120
+            deviation = (price - ma250) / ma250
 
             if paused and ts.state not in ("cooldown",):
                 effective_prev = (ts.period - 1) - ts.period_offset
@@ -429,13 +429,13 @@ def run_backtest(price_data, bt_start, bt_end):
             if ts.state == "cooldown" and deviation < COOLDOWN_RESUME:
                 effective_state = "resume"
 
-            result = compute_period(ts.base, effective_period, price, ma120, holding,
+            result = compute_period(ts.base, effective_period, price, ma250, holding,
                                     effective_state, global_cumulative,
                                     frozen_target=ts.frozen_target)
 
             plans.append({
                 "tname": tname, "ts": ts, "date_use": date_use,
-                "price": price, "ma120": ma120, "holding": holding,
+                "price": price, "ma250": ma250, "holding": holding,
                 "result": result, "deviation": deviation,
             })
 
@@ -509,7 +509,7 @@ def run_backtest(price_data, bt_start, bt_end):
 
             backtest_rows[tname].append(dict(
                 date=date_use.strftime("%Y-%m-%d"), period=ts.period,
-                price=price, ma120=p["ma120"], holding=holding,
+                price=price, ma250=p["ma250"], holding=holding,
                 **{k: result[k] for k in ["target", "deviation", "regular", "harvest", "extra", "actual"]},
                 notes=notes,
             ))

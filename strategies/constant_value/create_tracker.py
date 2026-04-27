@@ -168,7 +168,7 @@ def create_param_sheet(wb):
 #  B  期数          手动
 #  C  目标市值       公式  = 基准金额 × B
 #  D  当前价格       手动
-#  E  120日均线      手动
+#  E  250日均线      手动
 #  F  均线偏离度     公式  = (D-E)/E
 #  G  当前持仓份额   手动（上期操作后份额，首期填0）
 #  H  当前持仓市值   公式  = G × D
@@ -188,7 +188,7 @@ HEADERS = [
     "期数",        # B 2
     "目标市值",    # C 3
     "当前价格",    # D 4
-    "120日均线",   # E 5
+    "250日均线",   # E 5
     "均线偏离度",  # F 6
     "持仓份额",    # G 7  (上期结束后的持仓)
     "持仓市值",    # H 8
@@ -279,7 +279,7 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         c.value = f"=IFERROR({base_ref}*(B{r}-{period_offset_ref}),\"\")"
         # D: 当前价格
         _cell(ws, r, 4, fill=fill_m, fmt="#,##0.0000")
-        # E: 120日均线
+        # E: 250日均线
         _cell(ws, r, 5, fill=fill_m, fmt="#,##0.0000")
         # F: 均线偏离度 = (D-E)/E
         c = _cell(ws, r, 6, fill=fill_f, fmt=PCT)

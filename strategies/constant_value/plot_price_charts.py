@@ -32,7 +32,7 @@ for period_key, bt in all_results.items():
 
         dates_all = df.index
         close_all = df['close'].values
-        ma120_all = df['ma120'].values
+        ma250_all = df['ma250'].values
 
         buy_dates, buy_prices, buy_sizes = [], [], []
         sell_dates, sell_prices, sell_sizes = [], [], []
@@ -72,7 +72,7 @@ for period_key, bt in all_results.items():
                                          sharex=True, gridspec_kw={'hspace': 0.06})
 
         ax1.plot(dates_all, close_all, color='#333333', linewidth=1.8, label='收盘价', zorder=2)
-        ax1.plot(dates_all, ma120_all, color='#F4A261', linewidth=1.8, label='120日均线',
+        ax1.plot(dates_all, ma250_all, color='#F4A261', linewidth=1.8, label='250日均线',
                  linestyle='--', alpha=0.85, zorder=2)
 
         s_base = 80
