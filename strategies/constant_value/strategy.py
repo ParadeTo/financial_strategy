@@ -103,7 +103,7 @@ def compute_period(base, period, price, ma120, holding, state, global_cumulative
             state_out="cooldown",
         )
 
-    # 减半清仓：卖至目标市值的 50%
+    # 减半清仓：卖至目标市值的 50%，同时目标市值也减半
     partial_target = target_val * 0.5
     if deviation >= PARTIAL_LIQUIDATE_THRESHOLD and holding > partial_target:
         sell_amount = holding - partial_target
@@ -112,6 +112,7 @@ def compute_period(base, period, price, ma120, holding, state, global_cumulative
             regular=0, harvest=-sell_amount, extra=0, actual=-sell_amount,
             notes="减半清仓（偏离度{:+.1f}%，减至目标50%%）".format(deviation * 100),
             state_out="normal",
+            partial_liquidate=True,
         )
 
     gap = max(target_val - holding, 0)
@@ -486,6 +487,13 @@ def run_backtest(price_data, bt_start, bt_end):
                     shares_sold = sell_amount / price
                     ts.shares = max(0, ts.shares - shares_sold)
                     reserve_pool += sell_amount
+
+                # 减半清仓后，有效期数（目标市值）同步减半
+                if result.get("partial_liquidate"):
+                    ep = ts.period - ts.period_offset
+                    ts.period_offset = ts.period - ep / 2
+                    if ts.frozen_target is not None:
+                        ts.frozen_target *= 0.5
 
                 ts.state = result.get("state_out", "normal")
 

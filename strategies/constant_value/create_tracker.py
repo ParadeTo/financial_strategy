@@ -242,6 +242,10 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
     _cell(ws, r_legend, 3, "建议参考", fill=SUGGEST_FILL, font=GRAY_FONT, align=CENTER)
     for col in range(4, len(HEADERS) + 1):
         _cell(ws, r_legend, col, fill=_fill("FFFFFF"))
+    # 期数偏移（减半清仓后脚本自动更新，初始为 0）
+    PERIOD_OFFSET_COL = len(HEADERS) + 2  # col S = 19
+    _cell(ws, r_legend, len(HEADERS) + 1, "期数偏移:", font=GRAY_FONT, align=CENTER)
+    _cell(ws, r_legend, PERIOD_OFFSET_COL, 0, fill=MANUAL_FILL, font=BOLD_FONT, align=CENTER)
 
     # 表头
     HDR_ROW = 4
@@ -252,6 +256,7 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
     base_ref       = f"参数配置!$C${PARAM_BASE_ROW + etf_index}"
     partial_ref    = f"参数配置!$C${PARAM_PARTIAL_LIQ_ROW}"
     full_ref       = f"参数配置!$C${PARAM_FULL_LIQ_ROW}"
+    period_offset_ref = f"$S$3"   # col S = 19 = PERIOD_OFFSET_COL
 
     # 预填 30 行数据行
     DATA_START = HDR_ROW + 1
@@ -269,9 +274,9 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         _cell(ws, r, 1, fill=fill_m, fmt="YYYY-MM-DD", align=CENTER)
         # B: 期数
         _cell(ws, r, 2, fill=fill_m, align=CENTER)
-        # C: 目标市值 = 基准金额 × 期数
+        # C: 目标市值 = 基准金额 × (期数 - 期数偏移)
         c = _cell(ws, r, 3, fill=fill_f, fmt=YUAN)
-        c.value = f"=IFERROR({base_ref}*B{r},\"\")"
+        c.value = f"=IFERROR({base_ref}*(B{r}-{period_offset_ref}),\"\")"
         # D: 当前价格
         _cell(ws, r, 4, fill=fill_m, fmt="#,##0.0000")
         # E: 120日均线
