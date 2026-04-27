@@ -15,8 +15,7 @@ ETF_NAMES   = ["沪深300 ETF", "中证500 ETF", "恒生指数 ETF", "纳指100 
 BASE_AMOUNTS = [1500, 1500, 600, 2400]
 MARKETS      = ["A股", "A股", "港股", "美股"]
 
-PARTIAL_LIQUIDATE  = 0.35   # 减半清仓：减至目标市值 50%，不进冷却
-FULL_LIQUIDATE     = 0.55   # 全仓清仓 + 冷却期
+FULL_LIQUIDATE     = 0.55   # 全仓清仓 + 冷却期 + 目标市值冻结
 COOLDOWN_RESUME    = 0.03
 PAUSE_TOTAL        = 150000   # 触发增量阶段的累计投入门槛
 INCREMENT_PER_PERIOD = 2000   # 增量阶段每期注入储备金池的金额
@@ -72,11 +71,10 @@ PARAM_SHEET = "参数配置"
 
 # Named cell positions (row in 参数配置 sheet)
 PARAM_BASE_ROW        = 5   # 沪深300 base row; +etf_index for others
-PARAM_PARTIAL_LIQ_ROW = 12  # 减半清仓偏离度阈值
-PARAM_FULL_LIQ_ROW    = 13  # 全仓清仓偏离度阈值
+PARAM_FULL_LIQ_ROW    = 12  # 全仓清仓偏离度阈值
 # 增量阶段参数
-PARAM_PAUSE_ROW  = 16  # 触发增量阶段门槛（累计净投入）
-PARAM_INCR_ROW   = 17  # 增量阶段每期注入金额
+PARAM_PAUSE_ROW  = 15  # 触发增量阶段门槛（累计净投入）
+PARAM_INCR_ROW   = 16  # 增量阶段每期注入金额
 
 
 def create_param_sheet(wb):
@@ -123,10 +121,8 @@ def create_param_sheet(wb):
     _hcell(ws, r2, 3, "数值")
     _hcell(ws, r2, 4, "说明")
     rows_liq = [
-        ("减半清仓偏离度阈值", PARTIAL_LIQUIDATE,
-         f"偏离度超 +{int(PARTIAL_LIQUIDATE*100)}%，卖至目标市值 50%，不进冷却"),
         ("全仓清仓偏离度阈值", FULL_LIQUIDATE,
-         f"偏离度超 +{int(FULL_LIQUIDATE*100)}%，全部清仓并进入冷却期"),
+         f"偏离度超 +{int(FULL_LIQUIDATE*100)}%，全部清仓并进入冷却期；冷却期目标冻结，解除后从第 1 期重新积累"),
     ]
     for j, (k, v, desc) in enumerate(rows_liq):
         rr = r2 + 1 + j
@@ -136,7 +132,7 @@ def create_param_sheet(wb):
         _cell(ws, rr, 4, desc, fill=FORMULA_FILL, align=LEFT)
 
     # ── 增量阶段参数 ────────────────────────
-    r3 = r2 + 4
+    r3 = r2 + 3
     ws.cell(row=r3, column=1, value="三、增量阶段").font = Font(bold=True, size=13, color="2F5496")
     rows_incr = [
         ("触发门槛（累计净投入）", PAUSE_TOTAL,          "达到后切换为增量阶段，买卖均走储备金池"),
@@ -172,7 +168,7 @@ def create_param_sheet(wb):
 #  F  均线偏离度     公式  = (D-E)/E
 #  G  当前持仓份额   手动（上期操作后份额，首期填0）
 #  H  当前持仓市值   公式  = G × D
-#  I  建议操作金额   公式  正=买 负=卖（恒定市值法：缺口补足/超额卖出/减半清仓/全清仓）
+#  I  建议操作金额   公式  正=买 负=卖（恒定市值法：缺口补足/超额卖出/全清仓）
 #  J  建议操作       公式  文字说明
 #  K  建议金额       公式  = I（备用列，与I相同）
 #  L  实际操作金额   手动  正=买入 负=卖出
@@ -254,7 +250,6 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
 
     # 基准金额引用（参数配置!$C$row）
     base_ref       = f"参数配置!$C${PARAM_BASE_ROW + etf_index}"
-    partial_ref    = f"参数配置!$C${PARAM_PARTIAL_LIQ_ROW}"
     full_ref       = f"参数配置!$C${PARAM_FULL_LIQ_ROW}"
     period_offset_ref = f"$S$3"   # col S = 19 = PERIOD_OFFSET_COL
 
@@ -289,13 +284,12 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         # H: 持仓市值 = G × D
         c = _cell(ws, r, 8, fill=fill_f, fmt=YUAN)
         c.value = f"=IFERROR(G{r}*D{r},\"\")"
-        # I: 建议操作金额（恒定市值法：正=买入差额，负=卖出超额/减半/全清）
+        # I: 建议操作金额（恒定市值法：正=买入差额，负=卖出超额/全清）
         c = _cell(ws, r, 9, fill=fill_f, fmt=YUAN)
         c.value = (
             f'=IFERROR('
             f'IF(F{r}>={full_ref},-H{r},'
-            f'IF(AND(F{r}>={partial_ref},H{r}>C{r}*0.5),-(H{r}-C{r}*0.5),'
-            f'C{r}-H{r})),'
+            f'C{r}-H{r}),'
             f'"")'
         )
         # J: 建议操作
@@ -303,8 +297,7 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
         c.value = (
             f'=IFERROR('
             f'IF(F{r}>={full_ref},"全仓清仓",'
-            f'IF(AND(F{r}>={partial_ref},H{r}>C{r}*0.5),"减半清仓",'
-            f'IF(H{r}>C{r},"卖出超额","正常定投"))),'
+            f'IF(H{r}>C{r},"卖出超额","正常定投")),'
             f'"")'
         )
         # K: 建议金额 = I
