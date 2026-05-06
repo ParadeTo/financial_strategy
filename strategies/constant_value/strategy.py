@@ -2,7 +2,7 @@
 
 策略要点：
 - 恒定市值法：持仓 < 目标买入差额，持仓 > 目标直接卖出全部超额
-- 极端清仓：偏离度超 +FULL_LIQUIDATE_THRESHOLD 全清仓，进入冷却期
+- 极端清仓：偏离度超阈值（A股+50%/港股+35%/纳指+30%）全清仓，进入冷却期
 - 冷却期间目标市值冻结不增长，解除后从第1期重新积累
 - 无减半清仓、无加码机制
 """
@@ -28,7 +28,13 @@ TOTAL_PER_PERIOD = 6000
 PAUSE_TOTAL = 150000
 INCREMENT_PER_PERIOD = 2000
 
-FULL_LIQUIDATE_THRESHOLD = 0.55      # 全仓清仓 + 冷却 + 目标冻结
+# 各标的独立清仓阈值（A股+50% / 港股+35% / 纳指+30%）
+FULL_LIQUIDATE_THRESHOLDS = {
+    "沪深300 ETF": 0.50,
+    "中证500 ETF": 0.50,
+    "恒生指数 ETF": 0.35,
+    "纳指100 ETF": 0.30,
+}
 RESERVE_INTEREST_ANNUAL = 0.01
 COOLDOWN_RESUME = 0.03
 LARGE_INVEST_MULT = 2.5  # regular > base × 2.5 视为单期大额投入
@@ -81,7 +87,7 @@ def style_data_cell(ws, row, col, fmt=None, font=None):
 # ═══════════════════════════════════════════════════════════
 # DCA Engine
 # ═══════════════════════════════════════════════════════════
-def compute_period(base, period, price, ma250, holding, state, global_cumulative, frozen_target=None):
+def compute_period(base, period, price, ma250, holding, state, global_cumulative, frozen_target=None, liquidate_threshold=0.55):
     target_val = frozen_target if frozen_target is not None else base * period
     deviation = (price - ma250) / ma250 if ma250 != 0 else 0
     paused = global_cumulative >= PAUSE_TOTAL
@@ -95,7 +101,7 @@ def compute_period(base, period, price, ma250, holding, state, global_cumulative
         )
 
     # 全仓清仓
-    if deviation >= FULL_LIQUIDATE_THRESHOLD and holding > 0:
+    if deviation >= liquidate_threshold and holding > 0:
         return dict(
             target=target_val, deviation=deviation,
             regular=0, harvest=0, extra=0, actual=-holding,
@@ -189,7 +195,7 @@ def create_parameter_overview(wb):
     row = r + 2
     ws1.cell(row=row, column=1, value="三、清仓机制").font = Font(bold=True, size=13, color="2F5496")
     for i, (k, v) in enumerate([
-        ("全仓清仓条件", "偏离度超 +{:.0f}%，全部卖出并进入冷却期".format(FULL_LIQUIDATE_THRESHOLD * 100)),
+        ("全仓清仓条件", "偏离度超阈值（沪深300/中证500: +50%，恒生: +35%，纳指100: +30%），全部卖出并进入冷却期"),
         ("冷却期目标市值", "冻结不增长，等到偏离度回落 +{:.0f}% 以下才解冻".format(COOLDOWN_RESUME * 100)),
         ("冷却解除后", "目标市值从第 1 期重新积累，无减半清仓档位"),
         ("各标的独立判断", "清仓/冷却互不影响"),
@@ -424,7 +430,8 @@ def run_backtest(price_data, bt_start, bt_end):
 
             result = compute_period(ts.base, effective_period, price, ma250, holding,
                                     effective_state, global_cumulative,
-                                    frozen_target=ts.frozen_target)
+                                    frozen_target=ts.frozen_target,
+                                    liquidate_threshold=FULL_LIQUIDATE_THRESHOLDS[tname])
 
             plans.append({
                 "tname": tname, "ts": ts, "date_use": date_use,
