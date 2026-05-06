@@ -15,7 +15,13 @@ ETF_NAMES   = ["沪深300 ETF", "中证500 ETF", "恒生指数 ETF", "纳指100 
 BASE_AMOUNTS = [1500, 1500, 600, 2400]
 MARKETS      = ["A股", "A股", "港股", "美股"]
 
-FULL_LIQUIDATE     = 0.55   # 全仓清仓 + 冷却期 + 目标市值冻结
+# 各标的独立清仓阈值（A股+50% / 港股+35% / 纳指+30%）
+FULL_LIQUIDATE_THRESHOLDS = {
+    "沪深300 ETF": 0.50,
+    "中证500 ETF": 0.50,
+    "恒生指数 ETF": 0.35,
+    "纳指100 ETF": 0.30,
+}
 COOLDOWN_RESUME    = 0.03
 PAUSE_TOTAL        = 150000   # 触发增量阶段的累计投入门槛
 INCREMENT_PER_PERIOD = 2000   # 增量阶段每期注入储备金池的金额
@@ -71,10 +77,10 @@ PARAM_SHEET = "参数配置"
 
 # Named cell positions (row in 参数配置 sheet)
 PARAM_BASE_ROW        = 5   # 沪深300 base row; +etf_index for others
-PARAM_FULL_LIQ_ROW    = 12  # 全仓清仓偏离度阈值
-# 增量阶段参数
-PARAM_PAUSE_ROW  = 15  # 触发增量阶段门槛（累计净投入）
-PARAM_INCR_ROW   = 16  # 增量阶段每期注入金额
+PARAM_FULL_LIQ_ROW    = 12  # 沪深300阈值起始行；+etf_index 得到各标的对应行
+# 增量阶段参数（+3 因为清仓参数扩展为 4 行）
+PARAM_PAUSE_ROW  = 18  # 触发增量阶段门槛（累计净投入）
+PARAM_INCR_ROW   = 19  # 增量阶段每期注入金额
 
 
 def create_param_sheet(wb):
@@ -114,25 +120,23 @@ def create_param_sheet(wb):
     c2 = _cell(ws, total_row, 4, fmt='0.0%', fill=FORMULA_FILL, font=BOLD_FONT)
     c2.value = f"=SUM(D{r+1}:D{r+4})"
 
-    # ── 常规封顶 ────────────────────────────
+    # ── 清仓参数 ────────────────────────────
     r2 = total_row + 2
     _hcell(ws, r2, 1, "清仓参数")
-    _hcell(ws, r2, 2, "参数")
-    _hcell(ws, r2, 3, "数值")
+    _hcell(ws, r2, 2, "标的")
+    _hcell(ws, r2, 3, "阈值")
     _hcell(ws, r2, 4, "说明")
-    rows_liq = [
-        ("全仓清仓偏离度阈值", FULL_LIQUIDATE,
-         f"偏离度超 +{int(FULL_LIQUIDATE*100)}%，全部清仓并进入冷却期；冷却期目标冻结，解除后从第 1 期重新积累"),
-    ]
-    for j, (k, v, desc) in enumerate(rows_liq):
+    for j, tname in enumerate(ETF_NAMES):
         rr = r2 + 1 + j
-        _cell(ws, rr, 1, k,    fill=FORMULA_FILL)
-        _cell(ws, rr, 2, "",   fill=FORMULA_FILL)
-        _cell(ws, rr, 3, v,    fill=MANUAL_FILL, fmt='+0%')
+        threshold = FULL_LIQUIDATE_THRESHOLDS[tname]
+        desc = f"偏离度超 +{int(threshold*100)}%，全部清仓并进入冷却期" if j == 0 else ""
+        _cell(ws, rr, 1, "全仓清仓偏离度阈值" if j == 0 else "", fill=FORMULA_FILL)
+        _cell(ws, rr, 2, tname, fill=FORMULA_FILL)
+        _cell(ws, rr, 3, threshold, fill=MANUAL_FILL, fmt='+0%')
         _cell(ws, rr, 4, desc, fill=FORMULA_FILL, align=LEFT)
 
     # ── 增量阶段参数 ────────────────────────
-    r3 = r2 + 3
+    r3 = r2 + 6
     ws.cell(row=r3, column=1, value="三、增量阶段").font = Font(bold=True, size=13, color="2F5496")
     rows_incr = [
         ("触发门槛（累计净投入）", PAUSE_TOTAL,          "达到后切换为增量阶段，买卖均走储备金池"),
@@ -250,7 +254,7 @@ def create_etf_sheet(wb, tname, base_amount, etf_index, param_col):
 
     # 基准金额引用（参数配置!$C$row）
     base_ref       = f"参数配置!$C${PARAM_BASE_ROW + etf_index}"
-    full_ref       = f"参数配置!$C${PARAM_FULL_LIQ_ROW}"
+    full_ref       = f"参数配置!$C${PARAM_FULL_LIQ_ROW + etf_index}"
     period_offset_ref = f"$S$3"   # col S = 19 = PERIOD_OFFSET_COL
 
     # 预填 30 行数据行
