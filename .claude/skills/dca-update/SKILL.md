@@ -5,6 +5,8 @@ description: 执行一期定投操作：读取Excel现状→计算建议→用�
 
 # 定投追踪更新
 
+**执行定投相关任务时，必须先读取并严格遵循本 skill 的四阶段流程，直接运行下文脚本，不得自行简化、跳过或改写关键列逻辑。**
+
 执行一次完整的定投操作，分4个阶段。每个阶段完成后等待用户再继续。
 
 ---
@@ -21,7 +23,9 @@ description: 执行一期定投操作：读取Excel现状→计算建议→用�
 ## 固定配置
 
 ```python
-EXCEL_PATH   = "/Users/youxingzhi/ayou/financial_strategy/strategies/constant_value/定投追踪记录.xlsx"
+import os
+# 必须在 financial_strategy 仓库根目录执行
+EXCEL_PATH   = os.path.join(os.getcwd(), "strategies/constant_value/定投追踪记录.xlsx")
 ETF_SHEETS   = ["沪深300", "中证500", "恒生指数", "纳指100"]
 BASE_AMOUNTS = {"沪深300": 1500, "中证500": 1500, "恒生指数": 600, "纳指100": 2400}
 
@@ -41,11 +45,16 @@ DATA_START_ROW = 5   # ETF sheet 数据从第5行开始
 COL_B  = 2   # 期数      (手动)
 COL_D  = 4   # 当前价格  (手动)
 COL_E  = 5   # 250日均线 (手动)
-COL_G  = 7   # 持仓份额  (手动，填上期操作后份额)
+COL_G  = 7   # 持仓份额  (手动，填上期 N 列 = 上期 G+M)
 COL_L  = 12  # 实际操作金额 (手动，正=买入 负=卖出)
 COL_M  = 13  # 买卖份额     (手动，正=买入 负=卖出)
-COL_N  = 14  # 操作后份额   (公式，不手动写)
+COL_N  = 14  # 操作后份额   (公式 =G+M，不手动写)
 ```
+
+**列关系（易错，必须遵守）：**
+- 本期 G 列 = 上期 N 列（上期操作后份额）
+- 若 `data_only=True` 读不到 N（公式未缓存），用上期 `G + M` 代替
+- 本期 N 列由 Excel 公式自动算，**禁止**手动写入
 
 ---
 
@@ -54,19 +63,29 @@ COL_N  = 14  # 操作后份额   (公式，不手动写)
 写并运行以下 Python 代码（一次性脚本，直接在 Bash 中执行）：
 
 ```python
-import openpyxl, yfinance as yf, math, datetime
+import openpyxl, yfinance as yf, math, datetime, os
 
-EXCEL_PATH   = "/Users/youxingzhi/ayou/financial_strategy/strategies/constant_value/定投追踪记录.xlsx"
+EXCEL_PATH   = os.path.join(os.getcwd(), "strategies/constant_value/定投追踪记录.xlsx")
 ETF_SHEETS   = ["沪深300", "中证500", "恒生指数", "纳指100"]
 BASE_AMOUNTS = {"沪深300": 1500, "中证500": 1500, "恒生指数": 600, "纳指100": 2400}
 TICKERS      = {"沪深300": "510300.SS", "中证500": "510500.SS",
                 "恒生指数": "159920.SZ", "纳指100": "513100.SS"}
 
-PARTIAL_LIQUIDATE = 0.35
 FULL_LIQUIDATE    = 0.55
 PAUSE_TOTAL          = 150000
 INCREMENT_PER_PERIOD = 2000
 TOTAL_PER_PERIOD     = 6000
+
+def row_after_shares(row):
+    """上期操作后份额：优先 N 列，公式未缓存时用 G+M"""
+    n = row[13]  # N
+    if n is not None:
+        return float(n)
+    g = row[6]   # G
+    if g is None:
+        return 0.0
+    m = row[12] if row[12] is not None else 0  # M
+    return float(g) + float(m)
 
 # ── 读取 Excel 持仓 ──────────────────────────────────────────
 wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
@@ -77,11 +96,10 @@ for sname in ETF_SHEETS:
     last_period, last_shares = 0, 0.0
     for row in ws.iter_rows(min_row=5, values_only=True):
         b = row[1]   # B 列 期数
-        n = row[13]  # N 列 操作后份额
         if b is not None:
             try:
                 last_period = int(b)
-                last_shares = float(n) if n is not None else 0.0
+                last_shares = row_after_shares(row)
             except:
                 pass
     # 读取期数偏移（全仓清仓后由脚本自动更新，存于各 ETF sheet 的 S3 单元格）
@@ -198,63 +216,99 @@ print("  实际成交份额（正=买入 负=卖出）")
 
 ## 阶段三：录入实际成交 & 更新 Excel
 
-收到用户实际成交数据后，解析成如下结构（0表示未操作）：
+收到用户实际成交数据后，解析成如下结构（0 表示未操作；停牌暂停同样写一行，期数照常推进）：
 
 ```python
 actuals = {
-    "沪深300":  {"amount": 1320.00,  "shares": 200},
-    "中证500":  {"amount": 827.00,   "shares": 100},
-    "恒生指数": {"amount": 590.00,   "shares": 100},
-    "纳指100":  {"amount": 2100.00,  "shares": 200},
+    "沪深300":  {"price": 4.975, "ma250": 4.468, "amount": 1492.50, "shares": 300},
+    "中证500":  {"price": 9.797, "ma250": 7.343, "amount": 979.70,  "shares": 100},
+    "恒生指数": {"price": 1.412, "ma250": 1.553, "amount": 706.00,  "shares": 500},
+    "纳指100":  {"price": 2.214, "ma250": 1.815, "amount": 0, "shares": 0,
+                 "note": "停牌，本期暂停操作，目标市值照常增长"},
 }
 ```
 
-然后运行以下 Python 代码写入 Excel：
+- `price` / `ma250`：用户成交价；MA250 缺失时沿用上期 E 列
+- `amount`：实际成交金额（买入为正）；若用户只给价格+份额，用 `price × shares` 计算
+- `shares`：实际买卖份额（买入为正）
+
+然后运行以下**完整独立** Python 代码写入 Excel（不依赖阶段一脚本变量）：
 
 ```python
-import openpyxl, datetime
+import openpyxl, datetime, os
 
-EXCEL_PATH = "/Users/youxingzhi/ayou/financial_strategy/strategies/constant_value/定投追踪记录.xlsx"
-wb = openpyxl.load_workbook(EXCEL_PATH)
+EXCEL_PATH = os.path.join(os.getcwd(), "strategies/constant_value/定投追踪记录.xlsx")
+ETF_SHEETS = ["沪深300", "中证500", "恒生指数", "纳指100"]
+INCREMENT_PER_PERIOD = 2000
+
+def row_after_shares(row):
+    n = row[13]
+    if n is not None:
+        return float(n)
+    g = row[6]
+    if g is None:
+        return 0.0
+    m = row[12] if row[12] is not None else 0
+    return float(g) + float(m)
+
+# ── 读取上期状态 ──────────────────────────────────────────────
+wb_ro = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
+state, last_meta = {}, {}
+for sname in ETF_SHEETS:
+    ws = wb_ro[sname]
+    last_period, last_shares, last_ma250 = 0, 0.0, None
+    for row in ws.iter_rows(min_row=5, values_only=True):
+        if row[1] is not None:
+            last_period = int(row[1])
+            last_shares = row_after_shares(row)
+            if row[4] is not None:
+                last_ma250 = float(row[4])
+    state[sname] = {"last_period": last_period, "shares": last_shares}
+    last_meta[sname] = {"ma250": last_ma250}
+
+ws_sum_ro = wb_ro["每期汇总"]
+current_phase = "存量阶段"
+for row in ws_sum_ro.iter_rows(min_row=5, values_only=True):
+    if row[0] is not None and row[12] is not None:
+        current_phase = str(row[12])
+wb_ro.close()
+
+next_period = max(s["last_period"] for s in state.values()) + 1
 today = datetime.date.today().strftime("%Y-%m-%d")
 
+# ── 写入本期数据 ──────────────────────────────────────────────
+wb = openpyxl.load_workbook(EXCEL_PATH)
 for sname, actual in actuals.items():
     ws = wb[sname]
-    # 找第一个 B 列为空的数据行
-    write_row = None
-    for row_idx in range(5, 205):
-        if ws.cell(row=row_idx, column=2).value is None:
-            write_row = row_idx
-            break
-    if write_row is None:
-        print(f"[错误] {sname} 表格行数已满，请扩展 create_tracker.py 的 MAX_ROWS")
-        continue
+    write_row = next(r for r in range(5, 205) if ws.cell(r, 2).value is None)
 
-    ws.cell(row=write_row, column=1).value  = today                        # A 日期
-    ws.cell(row=write_row, column=2).value  = next_period                  # B 期数
-    ws.cell(row=write_row, column=4).value  = prices[sname]["price"]       # D 当前价格
-    ws.cell(row=write_row, column=5).value  = prices[sname]["ma250"]       # E 250日均线
-    ws.cell(row=write_row, column=7).value  = state[sname]["shares"]       # G 上期持仓份额
-    ws.cell(row=write_row, column=12).value = actual["amount"]             # L 实际操作金额
-    ws.cell(row=write_row, column=13).value = actual["shares"]             # M 买卖份额
+    price = actual.get("price")
+    ma250 = actual.get("ma250") or last_meta[sname]["ma250"]
 
-# 更新每期汇总 sheet
+    ws.cell(row=write_row, column=1).value  = today
+    ws.cell(row=write_row, column=2).value  = next_period
+    ws.cell(row=write_row, column=4).value  = price
+    ws.cell(row=write_row, column=5).value  = ma250
+    ws.cell(row=write_row, column=7).value  = state[sname]["shares"]  # 上期 N = 上期 G+M
+    ws.cell(row=write_row, column=12).value = actual["amount"]
+    ws.cell(row=write_row, column=13).value = actual["shares"]
+    if actual.get("note"):
+        ws.cell(row=write_row, column=17).value = actual["note"]  # Q 备注
+
 ws_sum = wb["每期汇总"]
-sum_row = None
-for row_idx in range(5, 205):
-    if ws_sum.cell(row=row_idx, column=1).value is None:
-        sum_row = row_idx
-        break
-
-ws_sum.cell(row=sum_row, column=1).value = next_period   # A 期数
-ws_sum.cell(row=sum_row, column=2).value = today          # B 日期
-# H 本期增量注入（存量阶段=0，增量阶段=2000）
+sum_row = next(r for r in range(5, 205) if ws_sum.cell(r, 1).value is None)
+ws_sum.cell(row=sum_row, column=1).value = next_period
+ws_sum.cell(row=sum_row, column=2).value = today
 ws_sum.cell(row=sum_row, column=8).value = (
     INCREMENT_PER_PERIOD if current_phase == "增量阶段" else 0
 )
 
 wb.save(EXCEL_PATH)
 print(f"[OK] Excel 已更新：{EXCEL_PATH}")
+for sname, actual in actuals.items():
+    before = state[sname]["shares"]
+    after  = before + actual["shares"]
+    print(f"  {sname}: G={before:.0f}  M={actual['shares']:+d}  → N={after:.0f}")
 ```
 
 **注意**：C/F/H/I/J/K/N/O/P 列均为公式列，openpyxl 会保留模板里的公式，打开 Excel 时自动计算，无需手动写入。
@@ -281,10 +335,9 @@ print(f"[OK] Excel 已更新：{EXCEL_PATH}")
 【储备金池】¥0.00
 
 【持仓快照（操作前→操作后）】
-  沪深300   0 → 200 份   市值 ¥X,XXX   目标 ¥X,XXX
-  中证500   0 → 100 份   市值 ¥X,XXX   目标 ¥X,XXX
-  恒生指数  0 → 100 份   市值 ¥X,XXX   目标 ¥X,XXX
-  纳指100   0 → 200 份   市值 ¥X,XXX   目标 ¥X,XXX
+  操作前份额 = 本期 G 列（上期 N 列）
+  操作后份额 = 本期 N 列 = G + M
+  沪深300   1,200 → 1,500 份   市值 ¥X,XXX   目标 ¥X,XXX
 
 Excel 已更新，用 Numbers/Excel 打开可查看公式计算结果。
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -313,8 +366,8 @@ OSEOF
 |------|---------|
 | yfinance 某标的获取失败 | 向用户请求手动输入价格和MA250 |
 | 用户说"按建议操作了" | 用建议金额和建议份额作为实际值 |
-| 用户说某标的"没操作" | amount=0, shares=0，仍要写入行（记录本期持仓不变） |
+| 用户说某标的"没操作" | amount=0, shares=0，仍写入行；G=上期N，N=G+0 不变 |
+| 某标的停牌暂停 | 同上，price 沿用上期 D 列，期数照常推进，目标市值照常增长；Q 列备注原因 |
 | 全仓清仓后持仓为0 | G列填0，L列填负数（卖出金额），M列填负数（卖出份额） |
 | Excel行数已满（>100行）| 提示用户重新运行 create_tracker.py 扩大 MAX_ROWS |
 | 增量阶段目标市值计算 | 如有期数重置（清仓后），以用户实际Excel数据为准，脚本计算仅供参考 |
-| Excel行数已满（>100行）| 提示用户重新运行 create_tracker.py 扩大 MAX_ROWS |
